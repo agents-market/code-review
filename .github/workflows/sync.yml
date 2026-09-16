@@ -83,12 +83,11 @@ jobs:
           PATCH_BUMP: ${{ github.event.client_payload.patch_bump || 'true' }}
         run: |
           set -euo pipefail
-          CURRENT=$(grep -E '^version:' /tmp/source.yaml | head -1 | awk '{print $2}' | tr -d '"'"'"')
-          echo "source version: $CURRENT"
-          if [ "$PATCH_BUMP" = "false" ]; then
-            NEW_VERSION="$CURRENT"
-          else
-            NEW_VERSION=$(echo "$CURRENT" | awk -F. '{$NF=$NF+1; print}' OFS=.)
+          # extract version, tolerating single or double quotes
+          NEW_VERSION=$(grep -E '^version:' /tmp/source.yaml | head -1 | sed -E "s/^version:[[:space:]]*['\"]?([0-9.]+)['\"]?[[:space:]]*$/\1/")
+          echo "source version: $NEW_VERSION"
+          if [ "$PATCH_BUMP" != "false" ]; then
+            NEW_VERSION=$(echo "$NEW_VERSION" | awk -F. '{$NF=$NF+1; print}' OFS=.)
           fi
           echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
           sed "s/^version: .*/version: $NEW_VERSION/" /tmp/source.yaml > .pipeline.yaml
