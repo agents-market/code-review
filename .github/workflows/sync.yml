@@ -23,40 +23,46 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: checkout
+      - name: checkout this repo
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: fetch latest from main repo
-        env:
-          SOURCE_URL: ${{ github.event.client_payload.source_url || 'https://raw.githubusercontent.com/agents-market/main/main/examples/pipelines/code-review-vulnerability-detection.yaml' }}
+      - name: checkout source (agents-market/main)
+        uses: actions/checkout@v4
+        with:
+          repository: agents-market/main
+          ref: main
+          path: _source
+          # no token — public repo
+
+      - name: read source yaml
         run: |
           set -euo pipefail
-          echo "fetching $SOURCE_URL"
-          HTTP_CODE=$(curl -sS -o /tmp/source.yaml -w "%{http_code}" "$SOURCE_URL")
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::fetch failed with HTTP $HTTP_CODE"
-            cat /tmp/source.yaml
+          SRC=_source/examples/pipelines/code-review-vulnerability-detection.yaml
+          if [ ! -f "$SRC" ]; then
+            echo "::error::source not found at $SRC"
             exit 1
           fi
+          cp "$SRC" /tmp/source.yaml
           echo "fetched $(wc -c < /tmp/source.yaml) bytes"
-          head -10 /tmp/source.yaml
+          head -8 /tmp/source.yaml
 
       - name: compare with current
+        id: diff
         run: |
           set -euo pipefail
           if cmp -s /tmp/source.yaml .pipeline.yaml; then
-            echo "no_change=true" >> $GITHUB_ENV
+            echo "changed=false" >> $GITHUB_OUTPUT
             echo "content identical, skipping"
-            exit 0
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "content differs, will sync"
           fi
-          echo "no_change=false" >> $GITHUB_ENV
-          echo "content differs, will sync"
 
       - name: verify yaml parses
-        if: env.no_change == 'false'
+        if: steps.diff.outputs.changed == 'true'
         run: |
           python3 -c "
           import yaml
@@ -68,26 +74,23 @@ jobs:
           "
 
       - name: bump version
-        if: env.no_change == 'false'
+        if: steps.diff.outputs.changed == 'true'
         env:
           PATCH_BUMP: ${{ github.event.client_payload.patch_bump || 'true' }}
         run: |
           set -euo pipefail
-          # read current version from new source
           CURRENT=$(grep -E '^version:' /tmp/source.yaml | head -1 | awk '{print $2}' | tr -d '"'"'"')
           echo "source version: $CURRENT"
           if [ "$PATCH_BUMP" = "false" ]; then
             NEW_VERSION="$CURRENT"
           else
-            # bump patch: 1.0.0 -> 1.0.1
             NEW_VERSION=$(echo "$CURRENT" | awk -F. '{$NF=$NF+1; print}' OFS=.)
           fi
           echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
-          # apply bump to a copy
           sed "s/^version: .*/version: $NEW_VERSION/" /tmp/source.yaml > .pipeline.yaml
 
       - name: commit + tag + push
-        if: env.no_change == 'false'
+        if: steps.diff.outputs.changed == 'true'
         env:
           SOURCE_SHA: ${{ github.event.client_payload.commit_sha }}
         run: |
