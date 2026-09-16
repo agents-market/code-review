@@ -1,20 +1,19 @@
-# agents-market/code-review — sync workflow
+# agents-market/code-review — incoming sync workflow
 #
-# Dual-trigger:
-#   1. schedule (every 15 min) — pull-based auto-sync, no PAT required
-#   2. repository_dispatch type=code-review-sync — instant push (future, requires PAT in main)
+# Triggered by repository_dispatch event type=code-review-sync from agents-market/main.
 #
 # Source of truth: agents-market/main/examples/pipelines/code-review-vulnerability-detection.yaml
 # This repo mirrors it as .pipeline.yaml + bumps patch version on each change.
+#
+# The push model: main repo's GITHUB_TOKEN dispatches the event; this repo receives it
+# without any extra auth (public receiver, same org).
 
 name: sync
 
 on:
-  schedule:
-    - cron: '*/15 * * * *'
   repository_dispatch:
     types: [code-review-sync]
-  workflow_dispatch:
+  workflow_dispatch:  # manual override; reads via gh CLI which uses runner's auth
 
 permissions:
   contents: write
@@ -29,23 +28,28 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: clone source (agents-market/main, public, no auth)
+      - name: resolve source (from dispatch payload OR manual read)
+        id: resolve
+        env:
+          PAYLOAD_B64: ${{ github.event.client_payload.content_base64 }}
+          PAYLOAD_URL: ${{ github.event.client_payload.source_url }}
         run: |
           set -euo pipefail
-          git clone --depth=1 --no-tags --single-branch https://github.com/agents-market/main.git _source
-          cd _source
-          git log -1 --oneline
-
-      - name: read source yaml
-        run: |
-          set -euo pipefail
-          SRC=_source/examples/pipelines/code-review-vulnerability-detection.yaml
-          if [ ! -f "$SRC" ]; then
-            echo "::error::source not found at $SRC"
-            ls -la _source/examples/pipelines/ || true
+          if [ -n "$PAYLOAD_B64" ]; then
+            echo "source=dispatch_payload" >> $GITHUB_OUTPUT
+            echo "$PAYLOAD_B64" | base64 -d > /tmp/source.yaml
+          elif [ -n "$PAYLOAD_URL" ]; then
+            echo "source=url" >> $GITHUB_OUTPUT
+            HTTP_CODE=$(curl -sS -o /tmp/source.yaml -w "%{http_code}" "$PAYLOAD_URL")
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "::error::fetch failed with HTTP $HTTP_CODE"
+              cat /tmp/source.yaml || true
+              exit 1
+            fi
+          else
+            echo "::error::dispatch had no content_base64 or source_url"
             exit 1
           fi
-          cp "$SRC" /tmp/source.yaml
           echo "fetched $(wc -c < /tmp/source.yaml) bytes"
           head -8 /tmp/source.yaml
 
