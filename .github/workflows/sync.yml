@@ -29,13 +29,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: checkout source (agents-market/main)
-        uses: actions/checkout@v4
-        with:
-          repository: agents-market/main
-          ref: main
-          path: _source
-          # no token — public repo
+      - name: clone source (agents-market/main, public, no auth)
+        run: |
+          set -euo pipefail
+          git clone --depth=1 --no-tags --single-branch https://github.com/agents-market/main.git _source
+          cd _source
+          git log -1 --oneline
 
       - name: read source yaml
         run: |
@@ -43,6 +42,7 @@ jobs:
           SRC=_source/examples/pipelines/code-review-vulnerability-detection.yaml
           if [ ! -f "$SRC" ]; then
             echo "::error::source not found at $SRC"
+            ls -la _source/examples/pipelines/ || true
             exit 1
           fi
           cp "$SRC" /tmp/source.yaml
