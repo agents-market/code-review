@@ -1,0 +1,68 @@
+# github-pr-* skills are STUBS (R12.2-R12.4). Stage-output refs: R10.8.
+# =============================================================================
+
+name: code-review-vulnerability-detection
+version: 1.0.0
+defaults:
+  model: MiniMax-M3
+
+inputs:
+  pr_number:
+    type: string
+    required: true
+  repo:
+    type: string
+    required: true
+
+stages:
+  - id: gather-context
+    uses: github-pr-context@v1
+    inputs:
+      pr_number: "${PR_NUMBER}"
+      repo: "${REPO}"
+      include_diff: "true"
+      max_diff_lines: 8000
+
+  - id: vulnerability-scan
+    provider: minimax
+    model: MiniMax-M3
+    system: |
+      You are a senior security engineer reviewing a pull request.
+      Focus: OWASP Top 10, secrets in code, SQL injection, XSS,
+      dependency vulnerability chains.
+      Always cite file:line, severity (low|medium|high|critical),
+      and a suggested fix. If no findings, return severity=none.
+    prompt: |
+      PR Title: ${stages.gather-context.outputs.title}
+      Author: ${stages.gather-context.outputs.author}
+      
+      Diff (truncated to ${stages.gather-context.outputs.max_diff_lines} lines):
+      ${stages.gather-context.outputs.diff}
+      
+      Output JSON with fields: severity, comments (array of
+      {path, line, body}), summary, event (APPROVE|REQUEST_CHANGES|COMMENT).
+    output_format: structured_json
+    fields: [severity, comments, summary, event]
+    max_tokens: 4096
+
+  - id: post-inline-comments
+    when: "stages.vulnerability-scan.outputs.severity != 'none'"
+    uses:
+      - github-pr-comment@v1
+      - github-pr-comment@v1
+    inputs:
+      pr_number: "${PR_NUMBER}"
+      repo: "${REPO}"
+      commit_sha: "${GITHUB_SHA}"
+      body: "${stages.vulnerability-scan.outputs.comments[0].body}"
+      path: "${stages.vulnerability-scan.outputs.comments[0].path}"
+      line: "${stages.vulnerability-scan.outputs.comments[0].line}"
+
+  - id: submit-review
+    uses: github-review-submit@v1
+    inputs:
+      pr_number: "${PR_NUMBER}"
+      repo: "${REPO}"
+      commit_sha: "${GITHUB_SHA}"
+      event: "${stages.vulnerability-scan.outputs.event}"
+      body: "${stages.vulnerability-scan.outputs.summary}"
