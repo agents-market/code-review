@@ -1,8 +1,8 @@
-# github-pr-* skills are STUBS (R12.2-R12.4). Stage-output refs: R10.8.
+# github-pr-* skills are STUBS (R12.2-R12.4). Stage-output refs: R10.8. R12.6 final.
 # =============================================================================
 
 name: code-review-vulnerability-detection
-version: 1.0.0
+version: 1.0.1
 defaults:
   model: MiniMax-M3
 
