@@ -95,6 +95,9 @@ jobs:
       - name: commit + tag + push
         if: steps.diff.outputs.changed == 'true'
         env:
+          # new_version (lowercase) matches the env key written in 'bump version' step.
+          # GitHub Actions preserves case in env keys — bash is case-sensitive.
+          NEW_VERSION: ${{ env.new_version }}
           SOURCE_SHA: ${{ github.event.client_payload.commit_sha }}
         run: |
           set -euo pipefail
