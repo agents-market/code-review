@@ -1,0 +1,85 @@
+# agents-market/code-review — incoming sync workflow
+# Triggered by repository_dispatch event of type `code-review-sync` from agents-market/main.
+
+name: sync-incoming
+
+on:
+  repository_dispatch:
+    types: [code-review-sync]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: github.event.client_payload.content_base64
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: decode + write pipeline yaml
+        env:
+          CONTENT_B64: ${{ github.event.client_payload.content_base64 }}
+        run: |
+          set -euo pipefail
+          echo "$CONTENT_B64" | base64 -d > .pipeline.yaml
+          echo "wrote $(wc -c < .pipeline.yaml) bytes"
+
+      - name: verify yaml parses
+        run: |
+          python3 -c "
+          import sys, yaml
+          with open('.pipeline.yaml') as f:
+            doc = yaml.safe_load(f)
+          assert 'name' in doc, 'name required'
+          assert 'stages' in doc and len(doc['stages']) > 0, 'stages required'
+          assert 'version' in doc, 'version required'
+          print(f\"parsed ok: name={doc['name']} version={doc['version']} stages={len(doc['stages'])}\")
+          "
+
+      - name: bump version if provided
+        env:
+          NEW_VERSION: ${{ github.event.client_payload.new_version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$NEW_VERSION" ]; then
+            echo "no new_version in payload, keeping current"
+            exit 0
+          fi
+          python3 -c "
+          import re
+          with open('.pipeline.yaml') as f: txt = f.read()
+          new = re.sub(r'^version:\s*[\d.]+\s*$', 'version: $NEW_VERSION', txt, count=1, flags=re.MULTILINE)
+          with open('.pipeline.yaml', 'w') as f: f.write(new)
+          "
+          echo "version bumped to $NEW_VERSION"
+
+      - name: commit + tag + push
+        env:
+          COMMIT_MSG: ${{ github.event.client_payload.commit_message || 'sync from agents-market/main' }}
+          NEW_VERSION: ${{ github.event.client_payload.new_version }}
+          SOURCE_SHA: ${{ github.event.client_payload.commit_sha }}
+        run: |
+          set -euo pipefail
+          git config user.name "agentsmarket-sync-bot"
+          git config user.email "bot@agentsmarket.world"
+          git add .pipeline.yaml
+          if git diff --cached --quiet; then
+            echo "no diff, skipping commit"
+            exit 0
+          fi
+          MSG="${COMMIT_MSG}"
+          if [ -n "$SOURCE_SHA" ]; then
+            MSG="$MSG\n\nSource: agents-market/main@${SOURCE_SHA}"
+          fi
+          git commit -m "$MSG"
+          git push origin main
+          if [ -n "$NEW_VERSION" ]; then
+            git tag -a "v${NEW_VERSION}" -m "v${NEW_VERSION}"
+            git push origin "v${NEW_VERSION}"
+            echo "tagged v${NEW_VERSION}"
+          fi
