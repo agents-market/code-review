@@ -28,6 +28,7 @@ jobs:
           fetch-depth: 0
 
       - uses: agents-market/pipeline-action@v1
+        id: pipeline
         with:
           mock: 'true'
           pipeline_file: .github/pipelines/code-review-smoke.yaml
