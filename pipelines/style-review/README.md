@@ -1,6 +1,6 @@
 ---
 name: style-review
-version: 3.3.6
+version: 3.3.7
 description: |
   AI-powered code style review for diffs. Identifies naming inconsistencies,
   missing types, unused exports, magic numbers, and codebase-pattern violations.
@@ -67,6 +67,7 @@ security and style in the same PR.
 | `language` | enum | `generic` | `typescript` / `javascript` / `python` / `rust` / `go` / `solidity` / `generic` |
 | `focus_area` | enum | `all` | `naming` / `types` / `exports` / `magic_numbers` / `all` |
 | `severity_threshold` | enum | `low` | `low` / `medium` / `high` / `critical` — drop findings below this floor |
+| `category_thresholds` | string | `""` | `category=level` pairs, comma-separated — `none` drops the category, a severity level keeps only that category's findings at or above it |
 | `provider` | enum | `minimax` | `minimax` / `openrouter` / `openai` / `anthropic` / `replicate` — the LLM provider for this run |
 | `model` | string | `MiniMax-M3` | The LLM model for this run — must be one the chosen provider carries |
 
@@ -126,6 +127,33 @@ times, at 99% confidence each.
 
 The aggregate stage now copies the analyze stage's findings verbatim, and the
 analyze stage is told that two findings with one cause are one finding.
+
+## What changed in 3.3.7
+
+**A per-category cut-off.** `severity_threshold` is one floor for the whole
+pipeline, and a consumer whose repository has no unexplained numeric literals
+still pays for every one the pipeline finds in a config file. The new
+`category_thresholds` input is a set of per-category floors:
+
+```
+category_thresholds: "magic_numbers=none,comments=high"
+```
+
+`none` drops the category entirely; a severity level keeps only that
+category's findings at or above it. The default is empty, which cuts nothing
+off — a caller that does not pass the input gets the pipeline it had.
+
+Measured on the case corpus in `fixtures/style-review` (108 runs, MiniMax-M3,
+temperature 0, $0.94): with `magic_numbers=none`, every `magic_numbers`
+finding is gone — 8 of 36 runs in the control arm, 0 of 36 in the cut arm —
+and no finding is renamed into another category to get around the cut. The
+other categories are unaffected, and the run is marginally cheaper.
+
+The cut-off removes true findings as well as false ones: a genuine unexplained
+literal is a `magic_numbers` finding, and it goes with the rest. That is the
+trade the caller is making — a scope, not a filter. It also does not fix the
+instability the pipeline is known for: a finding of another class still
+appears in one run and not in the next.
 
 ## Installation
 
