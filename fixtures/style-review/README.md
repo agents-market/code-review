@@ -2,8 +2,8 @@
 
 Six cases, one thing each, and a known answer per case. The corpus exists
 because `style-review` was measured for the first time in November 2026, and
-the measurement was a number on a page: "the pipeline found N findings on this
-diff". A number without a known answer is not a measurement — it is a mood.
+the first measurement was a number on a page: "the pipeline found N findings on
+this diff". A number without a known answer is not a measurement — it is a mood.
 
 The corpus also answers a question the pipeline's own guardrails raised: the
 rule "a number in prose is not a magic number" is in the spec, but a config
@@ -16,7 +16,8 @@ calling such values "executable configuration" and reporting them.
 cases/<case>.diff      the diff the pipeline is given
 cases/expected.md      what a good review says about each case
 run-cases.mjs          runs a spec over the cases and writes one JSON file
-summarize.py           turns those JSON files into the table below
+summarize.py           turns those JSON files into the categories table
+severity-stability.py  turns them into the severity table
 ```
 
 `expected.md` is the answer the runs are checked against: per case, what must
@@ -28,19 +29,14 @@ not be reported and what is expected. The pipeline never sees any of it.
 npm install --no-save --no-audit --no-fund @agentsmarket/pipeline-runtime@0.5.11
 export MINIMAX_API_KEY=...            # the model is the spec's own default, MiniMax-M3
 
-# the baseline: the published spec, before the cut-off existed
 node fixtures/style-review/run-cases.mjs --spec /path/to/style-review-3.3.6.yaml \
-  --repeats 2 --out /tmp/A.json
+  --repeats 6 --out /tmp/A.json
 
-# the control: the new spec, cut-off empty — the new input alone
 node fixtures/style-review/run-cases.mjs --spec pipelines/style-review/pipeline.yaml \
-  --repeats 2 --category-thresholds "" --out /tmp/B.json
+  --repeats 6 --category-thresholds "magic_numbers=none" --out /tmp/C.json
 
-# the cut: the new spec, one category cut off
-node fixtures/style-review/run-cases.mjs --spec pipelines/style-review/pipeline.yaml \
-  --repeats 2 --category-thresholds "magic_numbers=none" --out /tmp/C.json
-
-python3 fixtures/style-review/summarize.py /tmp/A.json /tmp/B.json /tmp/C.json
+python3 fixtures/style-review/summarize.py /tmp/A.json /tmp/C.json
+python3 fixtures/style-review/severity-stability.py /tmp/A.json /tmp/C.json
 ```
 
 `run-cases.mjs` executes the spec through the real runtime, so the
@@ -50,61 +46,79 @@ declares the input: an unknown input adds a line to the `Inputs:` block every
 stage receives, and that is a change in the prompt, so the baseline would be a
 different pipeline.
 
-## What it returns, measured 2026-11-02
+## What it returns, measured 2026-11-03
 
-Six runs per case per arm, 108 runs in total, $0.94, MiniMax-M3, temperature 0.
-Each cell lists the categories the analyzer reported, one cell per run.
+Six runs per case per arm, six arms, **216 runs, $1.85**, MiniMax-M3,
+temperature 0.
 
-| кейс | 3.3.6 (без отсечения) | 3.3.7 (без отсечения) | 3.3.7 + `magic_numbers=none` |
-|---|---|---|---|
-| `abbreviation` | naming,types · naming,types · naming,types · naming,types · naming,types · naming,types | types,naming,naming · naming,types · types,naming · naming,types,types · types,naming,naming · naming,types | naming,types · naming,naming,types · naming,naming · naming,naming · naming · naming,naming,types |
-| `config-number` | — · — · — · — · — | — · naming,magic_numbers · — · — · — · magic_numbers | — · — · — · — · — · — |
-| `lying-comment` | comments · — · — · comments · — · comments | comments,types · — · comments,types · comments,types · — · comments | — · — · comments,types · comments · comments · — |
-| `magic-literal` | magic_numbers · magic_numbers · magic_numbers · magic_numbers · magic_numbers · magic_numbers | magic_numbers · magic_numbers · magic_numbers · magic_numbers,types · magic_numbers · magic_numbers | — · — · — · — · — · — |
-| `missing-types` | types,naming,types · types,naming · types,naming,naming · types,types,naming · types,types,types · types,types,naming | types,naming,naming · types,types,naming · types,types,types · types,types · types,types · types,naming | types,naming,naming · types,naming · types · types,naming,naming · types,naming,naming · types,naming,exports |
-| `unused-export` | — · — · — · naming · naming | — · — · — · — · — · — | — · — · — · — · — · — |
+| arm | runs | findings | `magic_numbers` | severity | cost |
+|---|---|---|---|---|---|
+| base, 3.3.6 | 36 | 43 | 6 | low 37 · medium 6 · high 0 | $0.324 |
+| + "independent" | 36 | 39 | 6 | low 35 · medium 4 · high 0 | $0.306 |
+| + scale | 36 | 40 | 7 | low 25 · medium 7 · high 8 | $0.294 |
+| + scale and one clarification | 36 | 40 | 7 | low 26 · medium 3 · high 11 | $0.330 |
+| cut-off | 36 | 32 | **0** | low 30 · medium 2 · high 0 | $0.286 |
+| scale and cut-off | 36 | 40 | **0** | low 28 · medium 5 · high 7 | $0.307 |
 
-| arm | runs | findings | of them `magic_numbers` | cost |
-|---|---|---|---|---|
-| 3.3.6, no cut-off | 36 | 40 | 6 | $0.308 |
-| 3.3.7, no cut-off | 36 | 47 | 8 | $0.339 |
-| 3.3.7 + `magic_numbers=none` | 36 | 32 | **0** | $0.296 |
+What the arms are: **"independent"** is one sentence in the prompt (a
+finding's severity does not depend on the rest of the diff); **"scale"** is
+four levels with definitions; **"scale and one clarification"** is that plus
+one sentence separating `medium` from `high` for a literal; **"cut-off"** is
+`category_thresholds=magic_numbers=none`.
+
+### Severity stability
+
+`6/6` is how many of the six runs found the finding, and the list is the
+severities it was given.
+
+| case | expected | base | independent | scale | scale + fix | cut-off | scale + cut-off |
+|---|---|---|---|---|---|---|---|
+| `abbreviation` | `naming` | 6/6, low+medium — **floats** | 6/6, low | 6/6, low | 6/6, low | 6/6, low | 6/6, low |
+| `lying-comment` | `comments` | 5/6, low+medium — **floats** | 4/6, low+medium — **floats** | 3/6, high | 4/6, high | 4/6, low+medium — **floats** | 6/6, high |
+| `magic-literal` | `magic_numbers` | 6/6, low | 6/6, low | 6/6, high+medium — **floats** | 6/6, high | cut off | cut off |
+| `missing-types` | `types` | 6/6, low | 6/6, low | 6/6, low | 6/6, low | 6/6, low | 6/6, low |
+| `unused-export` | `exports` | 0/6 | 0/6 | 0/6 | 0/6 | 0/6 | 0/6 |
+
+`config-number`, the YAML config, produced one finding in one of 216 runs, and
+it was a `magic_numbers` finding — the false positive the spec's own rule was
+written against.
 
 ## What the numbers say
 
-**The cut-off does what it says.** Every `magic_numbers` finding is gone: 8 in
-the control arm, 0 in the cut arm. Not one finding was renamed into another
-category to get around it — in `magic-literal`, six of six control runs report
-`magic_numbers` and six of six cut runs report nothing at all.
+**Two of six cases float, and the scale fixes both.** In the base, the same
+finding comes back `low` in one run and `medium` in the next — on the
+abbreviation case and on the comment that contradicts the code. With the scale
+and the clarification, nothing floats and nothing new starts floating.
 
-**It costs nothing else.** The other categories are unaffected: `comments` is
-reported in 3 of 6 baseline runs, 4 of 6 control runs and 4 of 6 cut runs; the
-`naming` and `types` findings appear in every run of every arm. The cut arm is
-slightly cheaper, because there is less to write.
+**One sentence is not enough.** The "independent" arm — a single sentence
+telling the model that a finding's severity does not depend on the rest of the
+diff — fixes the abbreviation case and leaves the calibration where it was,
+but the comment case keeps floating. The model needs to know what each level
+means, not only that the label is absolute.
 
-**The rule the spec already had does not hold.** In the control arm, 2 of 6
-runs on `config-number` reported the YAML values as `magic_numbers` and called
-the file "executable configuration". The 3.3.6 rule — "a number in prose is
-not a magic number" — does not cover a config file, and the model reads a
-config value as a literal. That is the noise the cut-off removes, and it is
-the reason a cut-off is worth having even when the rule is in the spec.
+**The scale without the clarification makes a new case float.** On a literal,
+"the code works anyway" (`medium`) and "the unit is unknown" (`high`) are both
+true, and the model picks differently from run to run: 6/6 runs, two different
+severities. One clarifying sentence — a literal whose unit nobody can tell is
+`high` even when the code works — closes it: 6/6 `high`.
 
-**One case never produced its expected finding.** `unused-export` got a
-`findings` answer in 35 of 36 runs and a `magic_numbers` answer once — the
-pipeline did not report the unused export even once. It cannot: it is given a
-diff, not the repository, so it cannot know that `formatPercent` is never
-imported. `expected.md` marks that case's answer as optional for this reason.
-The `exports` category is, on this evidence, unreachable from a diff.
+**The scale moves the calibration, and that is a choice.** `low` goes from 37
+findings to 26 and `high` from none to 11. A comment that contradicts the code
+and a literal whose unit nobody can tell are `high` now, because that is what
+they cost the reader. The pipeline's advisory tone is unchanged; the labels
+are not.
 
-**The cut-off removes true findings too.** `magic-literal` is a real defect —
-`Date.now() - createdAt > 86400` is an unexplained literal — and the cut-off
-removes it in 6 of 6 runs. A cut-off is not a filter for wrong findings; it is
-a scope: the consumer decides that this class of remark is not worth a thread,
-and pays for it with the real findings of that class.
+**The cut-off does not fix severity — it removes the class.** `magic_numbers`
+goes from 6–7 findings to none, and with it every thread the consumer would
+have had to close. It is the only lever here that removes churn outright.
 
-**It does not fix the instability.** The issue the corpus was built for is a
-finding that appears in one run and not in the next. The cut-off removes the
-*class* that churns, but the classes it leaves behind still churn: the
-`comments` finding on `lying-comment` is present in 3–4 of 6 runs, and it
-changes severity between `low` and `medium`. That is the part the prompt
-anchor has to fix, and it needs its own measurement.
+**Presence floats in every arm.** The comment that contradicts the code is
+found in 3 to 6 of 6 runs, whichever arm it is. The scale fixes the label,
+not the detection, and for a consumer whose rule is "close every thread before
+merge" a finding that appears half the time is the bigger cost: it is a new
+thread, not a reworded one.
+
+**`exports` is unreachable from a diff.** 0 findings in 216 runs. The pipeline
+is given a diff, not the repository, so it cannot know that `formatPercent` is
+never imported. `expected.md` marks that case's answer as optional for this
+reason.

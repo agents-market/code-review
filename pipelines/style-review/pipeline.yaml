@@ -1,5 +1,5 @@
 # name: style-review
-# version: 3.3.7
+# version: 3.3.6
 # description: AI-powered code style review for diffs. Identifies naming inconsistencies, missing types, unused exports, magic numbers, and codebase-pattern violations. Outputs structured findings with severity + line + category + fix suggestion + estimated impact. Free to download; a server call costs the tokens it uses.
 # price_usdc: 0
 # call_price_usdc: 0
@@ -21,7 +21,7 @@
 #   - severity_threshold (enum low/medium/high/critical, default low)
 #   - category_thresholds (string, default "" — `category=level` pairs, comma separated)
 name: style-review
-version: 3.3.7
+version: 3.3.6
 description: AI code style review of diffs — identifies naming inconsistencies, missing types, unused exports, magic numbers, and codebase-pattern violations. Structured findings with severity + category + fix + impact. Vertical wedge expansion path — code style review as paid AI agent service.
 author_id: agentsmarket-team
 license: MIT
@@ -205,6 +205,25 @@ stages:
       `confidence` is how sure you are that the pattern is there; `severity` is what
       it costs the reader. A missing type annotation is certain and cheap: report
       it once per file, at low severity.
+
+      The scale is fixed, and a finding's severity does not depend on what else the
+      diff contains. Judge each finding on its own:
+
+      - `low` — the reader can ignore it and lose nothing: a missing type
+        annotation, an abbreviation, an unused export.
+      - `medium` — the reader has to decide something: rename it, type it, delete
+        it. The remark is right, and the code works anyway.
+      - `high` — the remark is right and the code misleads: a comment that
+        contradicts the code, a name that says the opposite of what the function
+        does, a literal whose unit nobody can tell. A literal whose unit nobody
+        can tell is `high` even when the code works: the reader cannot tell what
+        it means, so they have to look at it.
+      - `critical` — the code is wrong now, in a way the reader has to fix before
+        merge.
+
+      The same finding gets the same severity every time, whatever else the diff
+      contains. The scale is the cost of one remark to one reader, not a ranking
+      of the diff.
 
       Three remarks are not findings. Drop them silently.
 
