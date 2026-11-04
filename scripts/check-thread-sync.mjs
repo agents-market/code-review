@@ -48,7 +48,7 @@ import {
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const ROOT = join(HERE, '..');
 
-const MS_PER_DAY = 86400000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 /** A date `n` days from now, as `YYYY-MM-DD`. */
 const inDays = (n) => new Date(Date.now() + n * MS_PER_DAY).toISOString().slice(0, 10);
 
@@ -580,7 +580,7 @@ const check = (name, ok, detail = '') => {
 //     and the run says which verdict covered it.
 //
 //     The module reads the verdicts itself, from the base of the pull
-//     request. The caller says where they live and never what they are.
+//     request. The caller says nothing about them at all.
 {
   const { syncThreads } = await import('./thread-sync.mjs');
   const mkThread = (id, path, line, body) => ({

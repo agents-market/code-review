@@ -534,14 +534,12 @@ jobs:
               core.setOutput('verdicts_report', r.summary);
               if (r.summary) await core.summary.addHeading('Verdicts', 3).addRaw(r.summary).write();
             } catch (e) {
-              // The message can carry a path from the diff, and this is
-              // text the bot posts: the module escapes it. The fallback is
-              // for the case where the module itself could not be loaded —
-              // then there is no module to escape it, so it is stripped
-              // here.
-              const why = errorText ? errorText(e)
-                : String(e && e.message || e).replace(/[<>@`]/g, '').slice(0, 200);
-              core.warning(`thread sync FAILED — inline threads not synced: ${why}`);
+              // The message can carry a path from the diff: the module
+              // escapes it for the summary. The log gets the raw cause —
+              // it is not rendered as markdown, and it is where a
+              // developer looks for it.
+              const why = errorText ? errorText(e) : 'the sync module could not be loaded';
+              core.warning(`thread sync FAILED — inline threads not synced: ${e && e.message || e}`);
               await core.summary.addHeading('Inline thread sync failed', 3)
                 .addRaw(why).write();
             }
