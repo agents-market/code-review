@@ -216,17 +216,26 @@ every finding reported, and the run says what it could not read.
 
 ### Where the verdicts may be read from
 
-**From the base of the pull request, not from the pull request.**
+**From the base of the pull request, not from the pull request — and never
+from the caller.**
 
 This is the security property of the whole layer, and it is not a detail: a
 verdict silences a finding, so a pull request that carries its own verdicts
 is a pull request that silences its own review. The verdicts of the merge
 commit are the verdicts the pull request author wrote.
 
-So the caller reads the file from the base commit, and a verdict takes effect
-when it is merged — which is when it was agreed to. A consumer that reads the
-verdicts from anywhere the pull request can write breaks this, and nothing in
-the step can tell it apart from a legitimate one.
+So **the step reads the file itself**, from the base commit, and a verdict
+takes effect when it is merged — which is when it was agreed to.
+
+**The caller may say *where* the verdicts live; it may never say *what* they
+are.** The reusable workflow takes a `verdicts_path` and nothing else: it
+has no input that carries the content, because an input that carries the
+content is an input a caller can fill with anything it likes — including a
+verdict that silences the review of the pull request that is being reviewed.
+
+This is not a detail of the implementation, it is the shape of the API: a
+feature that silences a review has to be one where the silencing is decided
+by the maintainer, and a maintainer is a branch, not a caller.
 
 ### What a verdict does
 
@@ -256,15 +265,15 @@ the reasons are escaped before they are printed.
 
 ### Where the file lives
 
-The caller reads it and passes the content in. The reusable workflow
-(`.github/workflows/thread-sync.yml`) takes a `verdicts` input; the reference
-consumer (`.github/workflows/ai-review.yml`) reads
-`.github/ai-review-verdicts.json` out of the base commit of the pull request
-and passes it on.
+The default is `.github/ai-review-verdicts.json`, in the repository being
+reviewed. The reusable workflow (`.github/workflows/thread-sync.yml`) takes a
+`verdicts_path` — where they live, never what they are — and the reference
+consumer (`.github/workflows/ai-review.yml`) says the same path.
 
-The caller reads it, because the reusable workflow cannot: it is called from
-another repository, and a checkout of the caller's repository does not work on
-a pull request from a fork.
+The step reads it over the API, at the base commit of the pull request, so it
+needs no checkout of the reviewed repository: a reusable workflow is called
+from another repository, and a checkout of the caller's repository does not
+work on a pull request from a fork.
 
 ## What a consumer may rely on
 
@@ -282,9 +291,10 @@ a pull request from a fork.
 7. **The verdict file** — JSON, with `verdict`, `reason` and `until`. The date is required, a date
    further out than a year is capped, and a file that does not parse hides nothing: every finding is
    reported and the run says what it could not read.
-8. **Where the verdicts are read from** — the base of the pull request. A verdict read from the pull
-   request lets its author silence the review of their own pull request, and nothing in the step can
-   tell that apart from a legitimate verdict.
+8. **Where the verdicts are read from** — the base of the pull request, by the step itself. A verdict
+   read from the pull request lets its author silence the review of their own pull request, and
+   nothing in the step can tell that apart from a legitimate verdict. A caller may say where the
+   verdicts live; it may never hand them over.
 9. **What the step posts** — text, not markup: the key and the reason are escaped, cut to a line, and
    carry no link, no image and no mention.
 

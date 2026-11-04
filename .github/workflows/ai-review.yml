@@ -133,43 +133,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The verdicts: what a human decided about a finding. The thread sync
-      # knows what it said; this is what the human decided about it, and it
-      # lives in the repository, so the decision survives the next push and
-      # the next pull request.
-      #
-      # The BASE commit, not the merge commit. A pull request author must
-      # not be able to silence the review of their own pull request, so the
-      # verdicts are read from the base — the state the maintainer agreed
-      # to. A verdict takes effect when it is merged, which is when it was
-      # agreed to.
-      #
-      # The path is a convention of this file, not a rule of the contract: a
-      # consumer that wants another one reads it itself and passes the
-      # content to the reusable workflow.
-      #
-      # No file, no verdicts: the step below behaves exactly as it did
-      # before the verdict layer.
-      - name: Read the verdicts
-        id: verdicts
-        continue-on-error: true
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          F=".github/ai-review-verdicts.json"
-          CONTENT=""
-          if [ -n "${BASE:-}" ]; then
-            CONTENT=$(git show "$BASE:$F" 2>/dev/null || true)
-          fi
-          if [ -n "$CONTENT" ]; then
-            {
-              echo 'content<<AM_VERDICTS_8f3c'
-              printf '%s\n' "$CONTENT"
-              echo AM_VERDICTS_8f3c
-            } >> "$GITHUB_OUTPUT"
-          fi
-
       # node 22, not 20: openai@7.x declares engines.node >= 22 (EBADENGINE on 20)
       - uses: actions/setup-node@v4
         with:
@@ -532,7 +495,6 @@ jobs:
           FINDINGS: ${{steps.review_retry.outputs.findings_json || steps.review.outputs.findings_json}}
           MARKER: ${{ matrix.pipeline.slug }}
           CWE_REPORT: ${{ steps.cwe.outputs.report || '{}' }}
-          VERDICTS: ${{ steps.verdicts.outputs.content }}
         with:
           script: |
             // The step is not here: it is in scripts/thread-sync.mjs, and the
@@ -557,7 +519,10 @@ jobs:
                 github, context, findings,
                 marker: process.env.MARKER,
                 verified: cwe.verified || {},
-                verdicts: process.env.VERDICTS || '',
+                // The verdicts are read by the module, from the base of the
+                // pull request: this file does not read them and does not
+                // pass them on. A pull request author must not be able to
+                // silence the review of their own pull request.
                 verdictsPath: '.github/ai-review-verdicts.json',
                 warn: (m) => core.warning(m),
               });

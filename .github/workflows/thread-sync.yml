@@ -9,8 +9,7 @@
 # This is the step that decides whether a review comment is a new finding or
 # the same finding one line lower. It used to live as a two-hundred-line
 # `github-script` block inside `ai-review.yml`, and every consumer that wanted
-# it had to copy it — which is where it started to diverge. See issue #38, and
-# the contract below for the whole story.
+# it had to copy it — which is where it started to diverge. See issue #38.
 #
 # The step itself lives in `scripts/thread-sync.mjs`, and the reference
 # consumer `ai-review.yml` runs that same file — one implementation, not two.
@@ -52,8 +51,8 @@ on:
         required: false
         type: string
         default: '{}'
-      verdicts:
-        description: 'The verdicts of this repository, as JSON — see docs/thread-sync-contract.md.'
+      verdicts_path:
+        description: 'Where the verdicts live. The step reads that file from the base of the pull request itself.'
         required: false
         type: string
         default: ''
@@ -98,7 +97,7 @@ jobs:
           FINDINGS: ${{ inputs.findings }}
           MARKER: ${{ inputs.marker }}
           CWE_REPORT: ${{ inputs.cwe_report }}
-          VERDICTS: ${{ inputs.verdicts }}
+          VERDICTS_PATH: ${{ inputs.verdicts_path }}
         with:
           script: |
             // The step is not here: it is in scripts/thread-sync.mjs, and the
@@ -123,7 +122,9 @@ jobs:
                 github, context, findings,
                 marker: process.env.MARKER,
                 verified: cwe.verified || {},
-                verdicts: process.env.VERDICTS || '',
+                // Where the verdicts live — not what they are. The module
+                // reads the file from the base of the pull request.
+                verdictsPath: process.env.VERDICTS_PATH || '',
                 warn: (m) => core.warning(m),
               });
               // The wording lives in the module, so this step and the

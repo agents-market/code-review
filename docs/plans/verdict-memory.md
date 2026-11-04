@@ -132,27 +132,34 @@ without the key the human cannot write a verdict down at all.
 
 ### Where the file is read
 
-The caller reads it and passes the content in. The reusable workflow
-(`.github/workflows/thread-sync.yml`) takes a `verdicts` input; the reference
-consumer (`.github/workflows/ai-review.yml`) reads
-`.github/ai-review-verdicts.json` out of its checkout and passes it on.
+**By the step itself, from the base of the pull request.** The caller may say
+*where* the verdicts live; it may never say *what* they are.
 
-The caller reads it, because the reusable workflow cannot: it is called from
-another repository, and a checkout of the caller's repository does not work on
-a pull request from a fork.
+The reusable workflow (`.github/workflows/thread-sync.yml`) takes a
+`verdicts_path` and nothing else. The reference consumer
+(`.github/workflows/ai-review.yml`) says the same path. Neither of them reads
+the file and neither of them passes the content on.
 
-**From the base of the pull request, not from the pull request.** A verdict
-silences a finding, so a pull request that carries its own verdicts is a pull
-request that silences its own review. The verdicts of the merge commit are
-the verdicts the pull request author wrote. The reference consumer therefore
-reads the file with `git show "$BASE:<path>"` — the base commit — and a
-verdict takes effect when it is merged, which is when it was agreed to.
+That shape is the whole security property of the layer, and it took two
+reviews to get to:
 
-This was not the first design. The first one read the file out of the
-checkout, which is the merge commit; the security audit of the pull request
-that implemented it said, in as many words, that a pull request author could
-add a file-wide verdict for a file they touched and silence the review of
-their own pull request. The finding was right.
+- the first design read the file out of the checkout, which is the merge
+  commit — that is, from the pull request. A pull request author could add a
+  file-wide verdict for a file they touched and silence the review of their
+  own pull request;
+- the second design read the file in the caller and passed the content in as
+  the input of the reusable workflow. The security audit of that pull request
+  said, in as many words, that a caller-controlled verdict is a way to inject
+  approvals into a review. It was right: an input that carries the content is
+  an input the caller can fill with anything it likes.
+
+So the step reads the file itself, over the API, at the base commit of the
+pull request. It needs no checkout of the reviewed repository, which is what
+makes it work at all: a reusable workflow is called from another repository,
+and a checkout of the caller's repository does not work on a pull request from
+a fork.
+
+A verdict takes effect when it is merged — which is when it was agreed to.
 
 ### What goes into the comment is text, not markup
 
@@ -187,9 +194,10 @@ written by whoever opened the pull request.
    verdict and its reason;
 9. the report gives the key to file, and the key and the reason cannot carry
    markup, a link, a mention or a paragraph into a comment the bot posts;
-10. the reference consumer reads the verdicts from the base of the pull
-    request and not out of the checkout — a check that fails the moment
-    somebody moves the read back into the merge commit;
+10. the step reads the verdicts from the base of the pull request, and a
+    verdict the caller passes in is ignored — checks that fail the moment
+    somebody moves the read back into the pull request, or hands the content
+    back through an input;
 11. the contract and both callers know about the verdict layer.
 
 The end-to-end proof is a pull request on a consumer: a verdict in the file,
@@ -197,8 +205,10 @@ a finding that would be reported, and a run that does not report it.
 
 **The dogfood review of the pull request that implemented this found two of
 its own holes** — the untrusted source of the verdicts and the unsanitised
-text — and both are fixed above. A feature that silences a review is a
-feature that has to be reviewed twice.
+text — and both are fixed above. The second round of the same review found
+the third: the verdicts were still an *input*, so a caller could hand the
+step anything it liked. A feature that silences a review is a feature that
+has to be reviewed three times.
 
 ## What this does not do
 

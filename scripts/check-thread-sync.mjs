@@ -40,6 +40,7 @@ import {
   verdictKey,
   verdictSummary,
   DEFAULT_VERDICT,
+  DEFAULT_VERDICTS_PATH,
   MAX_HORIZON_DAYS,
 } from './thread-sync.mjs';
 
@@ -574,18 +575,32 @@ const check = (name, ok, detail = '') => {
 
 // 18. The whole step, with the verdicts: a covered finding is not posted,
 //     and the run says which verdict covered it.
+//
+//     The module reads the verdicts itself, from the base of the pull
+//     request. The caller says where they live and never what they are.
 {
   const { syncThreads } = await import('./thread-sync.mjs');
   const mkThread = (id, path, line, body) => ({
     id, path, line, isResolved: false, isOutdated: false,
     comments: { totalCount: 1, nodes: [{ id: `${id}-c`, databaseId: 1, body }] },
   });
-  const calls = { posted: [], warned: [] };
+  const calls = { posted: [], warned: [], read: [] };
   const standing = mkThread('t1', 'src/a.ts', 10,
     '<!-- am:p -->\n🔴 **HIGH** `CWE-89`\n<!-- am:class:CWE-89 -->\n (conf 90%): raw SQL');
-  const makeGithub = (threads) => ({
+  const makeGithub = (threads, verdicts = '') => ({
     graphql: async () => ({ repository: { pullRequest: { reviewThreads: { nodes: threads } } } }),
     rest: {
+      repos: {
+        getContent: async (a) => {
+          calls.read.push(a);
+          if (!verdicts) {
+            const e = new Error('Not Found');
+            e.status = 404;
+            throw e;
+          }
+          return { data: { content: Buffer.from(verdicts, 'utf8').toString('base64') } };
+        },
+      },
       pulls: {
         listFiles: async () => ({ data: [{ filename: 'src/a.ts' }] }),
         deleteReviewComment: async () => { throw new Error('should not delete'); },
@@ -593,19 +608,23 @@ const check = (name, ok, detail = '') => {
       },
     },
   });
-  const github = makeGithub([standing]);
   const context = {
     repo: { owner: 'o', repo: 'r' },
     issue: { number: 7 },
-    payload: { pull_request: { head: { sha: 'abc123' } } },
+    payload: { pull_request: { head: { sha: 'head123' }, base: { sha: 'base123' } } },
   };
   const finding = { file: 'src/a.ts', line: 10, cwe: 'CWE-89', severity: 'high', message: 'raw SQL', confidence: 0.9 };
   const until = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+  const verdicts = `{"src/a.ts::CWE-89": {"verdict": "accepted", "reason": "by design", "until": "${until}"}}`;
+  const github = makeGithub([standing], verdicts);
   const r = await syncThreads({
     github, context, findings: [finding], marker: 'p',
-    verdicts: `{"src/a.ts::CWE-89": {"verdict": "accepted", "reason": "by design", "until": "${until}"}}`,
     warn: (m) => calls.warned.push(m),
   });
+  check('the verdicts are read from the base of the pull request',
+    calls.read.length === 1 && calls.read[0].ref === 'base123', JSON.stringify(calls.read));
+  check('the verdicts are read from the default path',
+    calls.read.length === 1 && calls.read[0].path === DEFAULT_VERDICTS_PATH, JSON.stringify(calls.read));
   check('a covered finding is not posted', r.posted === 0 && calls.posted.length === 0, JSON.stringify(r));
   check('the comment that is already there is not closed either',
     r.resolved === 0 && r.replaced === 0, JSON.stringify(r));
@@ -615,11 +634,31 @@ const check = (name, ok, detail = '') => {
   check('the summary offers the key of a finding no verdict covers',
     r.summary.includes(verdictKey('src/a.ts', 'CWE-89')), r.summary);
 
+  // A verdict the caller passes in is ignored: the module reads the file
+  // itself, so a caller cannot silence a review by putting the content into
+  // the step.
+  const injected = await syncThreads({
+    github: makeGithub([], ''), context, findings: [finding], marker: 'p',
+    verdicts,
+    warn: (m) => calls.warned.push(m),
+  });
+  check('a verdict passed in by the caller is ignored',
+    injected.posted === 1, JSON.stringify(injected));
+
+  // No file at the base is the normal case: no verdicts, and nothing said
+  // about it.
+  const none = await syncThreads({
+    github: makeGithub([]), context, findings: [finding], marker: 'p',
+    warn: (m) => calls.warned.push(m),
+  });
+  check('no verdicts file means no verdicts', none.posted === 1, JSON.stringify(none));
+  check('no verdicts file says nothing', calls.warned.length === 0, JSON.stringify(calls.warned));
+
   // A verdict file that does not parse: nothing is hidden, and the run says
   // what it could not read. Nothing stands on the pull request here, so the
   // finding has to be posted.
   const broken = await syncThreads({
-    github: makeGithub([]), context, findings: [finding], marker: 'p', verdicts: '{not json',
+    github: makeGithub([], '{not json'), context, findings: [finding], marker: 'p',
     warn: (m) => calls.warned.push(m),
   });
   check('a verdict file that does not parse hides nothing', broken.posted === 1, JSON.stringify(broken));
@@ -676,10 +715,15 @@ const check = (name, ok, detail = '') => {
   check('a reason is cut to a line', long.length < 500, String(long.length));
 }
 
-// 20. The contract and the two callers know about the verdict layer. A
-//     feature the callers do not pass is a feature that does not run.
+// 20. The contract and the two callers know about the verdict layer, and
+//     neither of them can hand the step a verdict.
+//
+//     A feature the callers do not pass is a feature that does not run — and
+//     a feature the callers can pass is a feature a pull request author can
+//     use to silence the review of their own pull request.
 {
   const doc = readFileSync(join(ROOT, 'docs', 'thread-sync-contract.md'), 'utf8');
+  const module = readFileSync(join(ROOT, 'scripts', 'thread-sync.mjs'), 'utf8');
   const reusable = readFileSync(join(ROOT, '.github', 'workflows', 'thread-sync.yml'), 'utf8');
   const reference = readFileSync(join(ROOT, '.github', 'workflows', 'ai-review.yml'), 'utf8');
 
@@ -687,26 +731,27 @@ const check = (name, ok, detail = '') => {
   check('the contract names the verdict key', doc.includes('path::CLASS'), '');
   check('the contract says the line is not part of the key',
     /not part of the key/i.test(doc), '');
-  check('the reusable workflow takes the verdicts as an input', /verdicts:/.test(reusable), '');
-  check('the reusable workflow passes the verdicts to the module',
-    /verdicts: process\.env\.VERDICTS/.test(reusable), '');
-  check('the reference consumer reads the verdicts file',
-    /ai-review-verdicts\.json/.test(reference), '');
-  check('the reference consumer passes the verdicts to the module',
-    /verdicts: process\.env\.VERDICTS/.test(reference), '');
+
+  // The step reads the verdicts; nobody hands them over.
+  check('the module reads the verdicts itself', /getContent/.test(module), '');
+  check('the module reads them from the base of the pull request',
+    /pull_request\.base\.sha/.test(module), '');
+  check('the reusable workflow takes no verdict as an input',
+    !/^ {6}verdicts:/m.test(reusable), '');
+  check('the reusable workflow passes only the path',
+    /verdictsPath: process\.env\.VERDICTS_PATH/.test(reusable), '');
+  check('the reusable workflow carries no verdict content',
+    !/VERDICTS:\s*\$\{\{\s*inputs\.verdicts\s*\}\}/.test(reusable), '');
+  check('the reference consumer carries no verdict content',
+    !/VERDICTS:\s*\$\{\{\s*steps\./.test(reference), '');
   check('the reference consumer says where the verdicts live',
     /verdictsPath:/.test(reference), '');
-
-  // The verdicts are read from the BASE of the pull request, not from the
-  // pull request. A pull request author must not be able to silence the
-  // review of their own pull request: the verdicts of the merge commit are
-  // the verdicts the pull request author wrote.
-  check('the reference consumer reads the verdicts from the base of the pull request',
-    /git show "\$BASE:/.test(reference), '');
   check('the reference consumer does not read the verdicts out of the checkout',
-    !/cat "\$F"/.test(reference), '');
+    !/git show "\$BASE:/.test(reference), '');
   check('the contract says where the verdicts may be read from',
     /base/i.test(doc) && /verdict/i.test(doc), '');
+  check('the contract says the caller may not hand them over',
+    /never takes the verdicts as an input|never what they are/i.test(doc), '');
 }
 
 console.log(failures ? `\n${failures} checks failed` : '\nall checks passed');
