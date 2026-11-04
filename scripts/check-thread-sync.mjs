@@ -39,6 +39,7 @@ import {
   verdictFor,
   verdictKey,
   verdictSummary,
+  errorText,
   DEFAULT_VERDICT,
   DEFAULT_VERDICTS_PATH,
   MAX_HORIZON_DAYS,
@@ -623,7 +624,7 @@ const check = (name, ok, detail = '') => {
   });
   check('the verdicts are read from the base of the pull request',
     calls.read.length === 1 && calls.read[0].ref === 'base123', JSON.stringify(calls.read));
-  check('the verdicts are read from the default path',
+  check('the verdicts are read from the fixed path',
     calls.read.length === 1 && calls.read[0].path === DEFAULT_VERDICTS_PATH, JSON.stringify(calls.read));
   check('a covered finding is not posted', r.posted === 0 && calls.posted.length === 0, JSON.stringify(r));
   check('the comment that is already there is not closed either',
@@ -713,6 +714,13 @@ const check = (name, ok, detail = '') => {
     hints: [],
   });
   check('a reason is cut to a line', long.length < 500, String(long.length));
+
+  // The text of a failure is text too: it can carry a path from the diff.
+  const failed = errorText(new Error('could not comment on src/a.ts: see [here](https://evil.example) @everyone'));
+  check('a failure message may not carry a link', !failed.includes('](https://evil.example)'), failed);
+  check('a failure message may not carry a mention', !failed.includes('@everyone'), failed);
+  check('a failure message is cut to a line',
+    errorText(new Error('x'.repeat(5000))).length <= 200, String(errorText(new Error('x'.repeat(5000))).length));
 }
 
 // 20. The contract and the two callers know about the verdict layer, and
@@ -736,22 +744,35 @@ const check = (name, ok, detail = '') => {
   check('the module reads the verdicts itself', /getContent/.test(module), '');
   check('the module reads them from the base of the pull request',
     /pull_request\.base\.sha/.test(module), '');
+  check('the module reads them from a fixed path',
+    module.includes(`path: DEFAULT_VERDICTS_PATH`), '');
   check('the reusable workflow takes no verdict as an input',
-    !/^ {6}verdicts:/m.test(reusable), '');
-  check('the reusable workflow passes only the path',
-    /verdictsPath: process\.env\.VERDICTS_PATH/.test(reusable), '');
+    !/^ {6}verdicts/m.test(reusable), '');
+  check('the reusable workflow has no input at all for the verdicts',
+    !/verdicts_path/.test(reusable), '');
   check('the reusable workflow carries no verdict content',
-    !/VERDICTS:\s*\$\{\{\s*inputs\.verdicts\s*\}\}/.test(reusable), '');
+    !/VERDICTS/.test(reusable), '');
   check('the reference consumer carries no verdict content',
     !/VERDICTS:\s*\$\{\{\s*steps\./.test(reference), '');
-  check('the reference consumer says where the verdicts live',
-    /verdictsPath:/.test(reference), '');
+  check('the reference consumer does not pass the verdicts on',
+    !/verdictsPath:/.test(reference), '');
   check('the reference consumer does not read the verdicts out of the checkout',
     !/git show "\$BASE:/.test(reference), '');
   check('the contract says where the verdicts may be read from',
     /base/i.test(doc) && /verdict/i.test(doc), '');
   check('the contract says the caller may not hand them over',
-    /never takes the verdicts as an input|never what they are/i.test(doc), '');
+    /never say \*what\* they are|never hand them over/i.test(doc), '');
+
+  // A failure message can carry a path from the diff, so it is text like any
+  // other — and it is escaped by the module, in one place, so the two
+  // callers cannot drift.
+  check('the module escapes the text of a failure', /export const errorText/.test(module), '');
+  check('the reusable workflow prints a failure through the module',
+    /errorText\(e\)/.test(reusable), '');
+  check('the reference consumer prints a failure through the module',
+    /errorText\(e\)/.test(reference), '');
+  check('no caller prints a raw failure message',
+    !/addRaw\(e\.message\)/.test(reusable) && !/addRaw\(e\.message\)/.test(reference), '');
 }
 
 console.log(failures ? `\n${failures} checks failed` : '\nall checks passed');

@@ -513,9 +513,11 @@ jobs:
             let cwe = {};
             try { cwe = JSON.parse(process.env.CWE_REPORT || '{}'); } catch {}
 
+            let errorText = null;
             try {
-              const { syncThreads } = await import(SRC);
-              const r = await syncThreads({
+              const mod = await import(SRC);
+              errorText = mod.errorText;
+              const r = await mod.syncThreads({
                 github, context, findings,
                 marker: process.env.MARKER,
                 verified: cwe.verified || {},
@@ -523,7 +525,6 @@ jobs:
                 // pull request: this file does not read them and does not
                 // pass them on. A pull request author must not be able to
                 // silence the review of their own pull request.
-                verdictsPath: '.github/ai-review-verdicts.json',
                 warn: (m) => core.warning(m),
               });
               // The wording lives in the module, so this step and the
@@ -534,9 +535,12 @@ jobs:
               core.setOutput('verdicts_report', r.summary);
               if (r.summary) await core.summary.addHeading('Verdicts', 3).addRaw(r.summary).write();
             } catch (e) {
-              core.warning(`thread sync FAILED — inline threads not synced: ${e.message}`);
+              // The message can carry a path from the diff, and this is
+              // text the bot posts: the module escapes it.
+              const why = errorText ? errorText(e) : String(e && e.message || e).slice(0, 200);
+              core.warning(`thread sync FAILED — inline threads not synced: ${why}`);
               await core.summary.addHeading('Inline thread sync failed', 3)
-                .addRaw(e.message).write();
+                .addRaw(why).write();
             }
 
       - name: Upsert summary comment

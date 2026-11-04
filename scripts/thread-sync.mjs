@@ -156,9 +156,11 @@ export const classOfText = (text) => {
 };
 
 /**
- * Where the verdicts live, when nobody says otherwise.
+ * Where the verdicts live.
  *
- * A convention, not a rule: a caller that keeps them elsewhere says so.
+ * A fixed path, not a knob: the caller may not choose which file of the
+ * base commit is read as verdicts, because "which file" is the thing a
+ * caller must not decide.
  */
 export const DEFAULT_VERDICTS_PATH = '.github/ai-review-verdicts.json';
 
@@ -170,30 +172,31 @@ export const DEFAULT_VERDICTS_PATH = '.github/ai-review-verdicts.json';
  * silences the review of its own pull request. The base is the state the
  * maintainer agreed to, so that is where they are read from.
  *
- * The caller may say *where* the verdicts live; it may never say *what* they
- * are. That is the whole security property of this layer, and it is why
- * this reads the file instead of taking it as an input.
+ * The caller says nothing at all about the verdicts: not where they live,
+ * and not what they are. That is the whole security property of this layer,
+ * and it is why this reads the file instead of taking it as an input.
  *
  * @param {object} io
  * @param {object} io.github    the `github` object of actions/github-script
  * @param {object} io.context  the `context` object of actions/github-script
- * @param {string} [io.path]   where the verdicts live
  * @param {function} [io.warn] how to report a warning
  * @returns {Promise<string>}  the content of the file, or an empty string
  */
-export const readVerdicts = async ({ github, context, path = DEFAULT_VERDICTS_PATH, warn = () => {} }) => {
+export const readVerdicts = async ({ github, context, warn = () => {} }) => {
   const ref = context.payload && context.payload.pull_request
     && context.payload.pull_request.base && context.payload.pull_request.base.sha;
   if (!ref) return '';
   try {
-    const { data } = await github.rest.repos.getContent({ ...context.repo, path, ref });
+    const { data } = await github.rest.repos.getContent({
+      ...context.repo, path: DEFAULT_VERDICTS_PATH, ref,
+    });
     const content = data && data.content;
     if (!content) return '';
     return Buffer.from(content, 'base64').toString('utf8');
   } catch (e) {
     // No file at the base is the normal case: the repository has no verdicts
     // yet. Anything else is worth saying out loud.
-    if (e.status !== 404) warn(`verdicts: ${path} could not be read from the base — ${e.message}`);
+    if (e.status !== 404) warn(`verdicts: ${DEFAULT_VERDICTS_PATH} could not be read from the base — ${e.message}`);
     return '';
   }
 };
@@ -248,6 +251,19 @@ const safeCode = (value, max = 200) => String(value == null ? '' : value)
 const safeText = (value, max = 200) => safeCode(value, max)
   .replace(/[<>@]/g, '')
   .replace(/([\\*_\[\]()|])/g, '\\$1');
+
+/**
+ * The text of a failure, for a comment the bot posts.
+ *
+ * A failure message can carry a path from the diff — the diff is written by
+ * whoever opened the pull request — so it is text like any other and gets
+ * the same treatment. One implementation, so the two callers cannot drift.
+ *
+ * @param {Error|string} e  what went wrong
+ * @param {number} [max]    how much of it to keep
+ * @returns {string}  text, safe to print
+ */
+export const errorText = (e, max = 200) => safeText(e && e.message ? e.message : e, max);
 
 /**
  * The key as it is written down, normalised.
@@ -585,12 +601,10 @@ export const buildBody = ({ marker, finding, cls, emoji = {}, verified = {} }) =
  * @param {Array}  io.findings  the findings of this round
  * @param {string} io.marker    the pipeline id
  * @param {object} io.verified  the CWE catalogue entries, by id
- * @param {string} [io.verdictsPath]  where the verdicts live; they are read
- *   from the base of the pull request, never taken as an input
  * @param {function} io.warn    how to report a warning
  * @returns {Promise<object>}  the counters the log line prints
  */
-export const syncThreads = async ({ github, context, findings = [], marker, verified = {}, verdictsPath = DEFAULT_VERDICTS_PATH, warn = () => {} }) => {
+export const syncThreads = async ({ github, context, findings = [], marker, verified = {}, warn = () => {} }) => {
   const MARK = pipelineMarker(marker);
   const valid = findings.filter(f =>
     f && typeof f.file === 'string' && f.file.length > 0
@@ -622,13 +636,10 @@ export const syncThreads = async ({ github, context, findings = [], marker, veri
   const inDiff = new Set(files.map(f => f.filename));
 
   // What a human decided already. The verdicts are read from the base of
-  // the pull request, by this module: the caller may say where they live,
-  // never what they are. A file that does not parse hides nothing — the
-  // errors are reported and every finding is reported as usual.
-  const verdictsPathUsed = verdictsPath || DEFAULT_VERDICTS_PATH;
-  const parsed = parseVerdicts(await readVerdicts({
-    github, context, path: verdictsPathUsed, warn,
-  }));
+  // the pull request, by this module: the caller says nothing about them.
+  // A file that does not parse hides nothing — the errors are reported and
+  // every finding is reported as usual.
+  const parsed = parseVerdicts(await readVerdicts({ github, context, warn }));
   for (const e of parsed.errors) warn(e);
 
   // The decision: which threads to close, which findings to post, which
@@ -745,7 +756,7 @@ export const syncThreads = async ({ github, context, findings = [], marker, veri
     // the reference consumer say the same thing.
     logLine: `threads(${marker}) — ${posted} posted, ${resolved} resolved, `
       + `${replaced} replaced, ${skipped} suppressed, ${report.covered.length} by verdict`,
-    summary: verdictSummary(report, { path: verdictsPathUsed }),
+    summary: verdictSummary(report, { path: DEFAULT_VERDICTS_PATH }),
   };
 };
 

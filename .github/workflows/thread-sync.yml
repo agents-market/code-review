@@ -51,11 +51,6 @@ on:
         required: false
         type: string
         default: '{}'
-      verdicts_path:
-        description: 'Where the verdicts live. The step reads that file from the base of the pull request itself.'
-        required: false
-        type: string
-        default: ''
 
 permissions:
   contents: read
@@ -97,7 +92,6 @@ jobs:
           FINDINGS: ${{ inputs.findings }}
           MARKER: ${{ inputs.marker }}
           CWE_REPORT: ${{ inputs.cwe_report }}
-          VERDICTS_PATH: ${{ inputs.verdicts_path }}
         with:
           script: |
             // The step is not here: it is in scripts/thread-sync.mjs, and the
@@ -116,15 +110,14 @@ jobs:
             let cwe = {};
             try { cwe = JSON.parse(process.env.CWE_REPORT || '{}'); } catch {}
 
+            let errorText = null;
             try {
-              const { syncThreads } = await import(SRC);
-              const r = await syncThreads({
+              const mod = await import(SRC);
+              errorText = mod.errorText;
+              const r = await mod.syncThreads({
                 github, context, findings,
                 marker: process.env.MARKER,
                 verified: cwe.verified || {},
-                // Where the verdicts live — not what they are. The module
-                // reads the file from the base of the pull request.
-                verdictsPath: process.env.VERDICTS_PATH || '',
                 warn: (m) => core.warning(m),
               });
               // The wording lives in the module, so this step and the
@@ -132,7 +125,10 @@ jobs:
               core.info(r.logLine);
               if (r.summary) await core.summary.addHeading('Verdicts', 3).addRaw(r.summary).write();
             } catch (e) {
-              core.warning(`thread sync FAILED — inline threads not synced: ${e.message}`);
+              // The message can carry a path from the diff, and this is
+              // text the bot posts: the module escapes it.
+              const why = errorText ? errorText(e) : String(e && e.message || e).slice(0, 200);
+              core.warning(`thread sync FAILED — inline threads not synced: ${why}`);
               await core.summary.addHeading('Inline thread sync failed', 3)
-                .addRaw(e.message).write();
+                .addRaw(why).write();
             }

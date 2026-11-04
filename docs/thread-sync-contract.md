@@ -227,11 +227,11 @@ commit are the verdicts the pull request author wrote.
 So **the step reads the file itself**, from the base commit, and a verdict
 takes effect when it is merged — which is when it was agreed to.
 
-**The caller may say *where* the verdicts live; it may never say *what* they
-are.** The reusable workflow takes a `verdicts_path` and nothing else: it
-has no input that carries the content, because an input that carries the
-content is an input a caller can fill with anything it likes — including a
-verdict that silences the review of the pull request that is being reviewed.
+**The caller says nothing at all about the verdicts — not where they live,
+and not what they are.** The reusable workflow has no input for them: an
+input that carries the content is an input a caller can fill with anything it
+likes, and an input that carries the path lets a caller point the step at a
+file of their choosing instead of the one the maintainer agreed to.
 
 This is not a detail of the implementation, it is the shape of the API: a
 feature that silences a review has to be one where the silencing is decided
@@ -263,12 +263,16 @@ neither may change the shape of the comment: no code span may be closed, no
 link, no image, no mention, and not more than a line's worth. The paths and
 the reasons are escaped before they are printed.
 
+The message of a failure is the same kind of text — it can carry a path from
+the diff — and it is escaped by the same function, in the same module, so the
+two callers cannot drift.
+
 ### Where the file lives
 
-The default is `.github/ai-review-verdicts.json`, in the repository being
-reviewed. The reusable workflow (`.github/workflows/thread-sync.yml`) takes a
-`verdicts_path` — where they live, never what they are — and the reference
-consumer (`.github/workflows/ai-review.yml`) says the same path.
+The file is `.github/ai-review-verdicts.json`, in the repository being
+reviewed, and the path is fixed — the step reads that file and no other. A
+consumer that keeps its verdicts elsewhere has to keep them there; the path
+is not an input, because "which file" is the thing a caller must not decide.
 
 The step reads it over the API, at the base commit of the pull request, so it
 needs no checkout of the reviewed repository: a reusable workflow is called
@@ -345,11 +349,12 @@ drift away from the code.
     with:
       findings: ${{ steps.review.outputs.findings_json }}
       marker: code-review-security-audit
-      verdicts: ${{ steps.verdicts.outputs.content }}
     secrets: inherit
 ```
 
-`verdicts` is optional. Unset, the step behaves exactly as it did before the
+There is nothing else to pass. The verdicts are not an input: the step reads
+`.github/ai-review-verdicts.json` from the base of the pull request itself.
+A repository that has no such file behaves exactly as it did before the
 verdict layer: every finding is reported unless a comment of the same class is
 already there.
 

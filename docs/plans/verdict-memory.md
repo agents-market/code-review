@@ -132,15 +132,15 @@ without the key the human cannot write a verdict down at all.
 
 ### Where the file is read
 
-**By the step itself, from the base of the pull request.** The caller may say
-*where* the verdicts live; it may never say *what* they are.
+**By the step itself, from the base of the pull request. The caller says
+nothing about the verdicts.**
 
-The reusable workflow (`.github/workflows/thread-sync.yml`) takes a
-`verdicts_path` and nothing else. The reference consumer
-(`.github/workflows/ai-review.yml`) says the same path. Neither of them reads
-the file and neither of them passes the content on.
+The reusable workflow (`.github/workflows/thread-sync.yml`) has no input for
+them at all. The reference consumer (`.github/workflows/ai-review.yml`) does
+not read the file and does not pass it on. The path is fixed:
+`.github/ai-review-verdicts.json`.
 
-That shape is the whole security property of the layer, and it took two
+That shape is the whole security property of the layer, and it took three
 reviews to get to:
 
 - the first design read the file out of the checkout, which is the merge
@@ -151,7 +151,11 @@ reviews to get to:
   the input of the reusable workflow. The security audit of that pull request
   said, in as many words, that a caller-controlled verdict is a way to inject
   approvals into a review. It was right: an input that carries the content is
-  an input the caller can fill with anything it likes.
+  an input the caller can fill with anything it likes;
+- the third design let the caller choose the *path* as well. The audit of that
+  one said that a caller may select an arbitrary base-commit file as verdict
+  input. It was right too, and the fix was the same one: the path is fixed,
+  so there is nothing to choose.
 
 So the step reads the file itself, over the API, at the base commit of the
 pull request. It needs no checkout of the reviewed repository, which is what
@@ -172,6 +176,10 @@ reasons are escaped and cut to a line before they are printed.
 The security audit of the same pull request said this too (CWE-116), and it
 was right for the same reason: the path comes from the diff, and the diff is
 written by whoever opened the pull request.
+
+The message of a failure is the same kind of text — it can carry a path from
+the diff — so it goes through the same escaping, in the same module, and the
+two callers cannot drift.
 
 ## Verification
 
@@ -194,21 +202,20 @@ written by whoever opened the pull request.
    verdict and its reason;
 9. the report gives the key to file, and the key and the reason cannot carry
    markup, a link, a mention or a paragraph into a comment the bot posts;
-10. the step reads the verdicts from the base of the pull request, and a
-    verdict the caller passes in is ignored — checks that fail the moment
-    somebody moves the read back into the pull request, or hands the content
-    back through an input;
+10. the step reads the verdicts from the base of the pull request, from a
+    fixed path, and a verdict the caller passes in is ignored — checks that
+    fail the moment somebody moves the read back into the pull request, or
+    hands the content back through an input;
 11. the contract and both callers know about the verdict layer.
 
 The end-to-end proof is a pull request on a consumer: a verdict in the file,
 a finding that would be reported, and a run that does not report it.
 
-**The dogfood review of the pull request that implemented this found two of
-its own holes** — the untrusted source of the verdicts and the unsanitised
-text — and both are fixed above. The second round of the same review found
-the third: the verdicts were still an *input*, so a caller could hand the
-step anything it liked. A feature that silences a review is a feature that
-has to be reviewed three times.
+**The dogfood review of the pull request that implemented this found three of
+its own holes** — the untrusted source of the verdicts, the unsanitised text,
+and the verdicts still being an input — and all three are fixed above. A
+feature that silences a review is a feature that has to be reviewed three
+times.
 
 ## What this does not do
 
