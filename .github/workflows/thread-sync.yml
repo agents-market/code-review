@@ -98,9 +98,10 @@ jobs:
             // reference consumer (.github/workflows/ai-review.yml) uses that
             // same file. What is here is the wiring.
             //
-            // `import()`, not `require()`: the module is ESM and
+            // `import()`, not `require()`, for the module: it is ESM and
             // actions/github-script runs on node20, where `require()` of an
-            // ES module is not available on every runner image.
+            // ES module is not available on every runner image. `node:path`
+            // is a built-in, so `require()` is right for it.
             const path = require('node:path');
             const SRC = path.join(process.env.GITHUB_WORKSPACE, 'thread-sync-src', 'scripts', 'thread-sync.mjs');
 
@@ -125,9 +126,11 @@ jobs:
               core.info(r.logLine);
               if (r.summary) await core.summary.addHeading('Verdicts', 3).addRaw(r.summary).write();
             } catch (e) {
-              // The message can carry a path from the diff, and this is
-              // text the bot posts: the module escapes it.
-              const why = errorText ? errorText(e) : String(e && e.message || e).slice(0, 200);
+              // The message can carry a path from the diff: the module
+              // escapes it. The fallback is for the case where the module
+              // could not be loaded — then there is none to escape it.
+              const why = errorText ? errorText(e)
+                : String(e && e.message || e).replace(/[<>@`]/g, '').slice(0, 200);
               core.warning(`thread sync FAILED — inline threads not synced: ${why}`);
               await core.summary.addHeading('Inline thread sync failed', 3)
                 .addRaw(why).write();

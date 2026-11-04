@@ -241,6 +241,8 @@ visible to a human. The alternatives (an artifact of the check run, the
 comments on the pull request) are worse for the reasons in
 [Where the verdict lives](#where-the-verdict-lives).
 
-If the owner wants a different place, the change is contained: the file is read
-by the caller and the content is passed into `syncThreads`, so the module
-would read the same structure from another source.
+If the owner wants a different place, the change is contained in
+`readVerdicts`: the module reads the file and hands the content to the same
+parser, so another source would change where it reads from and nothing else.
+The one thing that cannot move is the *trust* — a verdict that silences a
+finding has to come from a place the pull request cannot write.

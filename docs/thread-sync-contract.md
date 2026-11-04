@@ -295,10 +295,10 @@ work on a pull request from a fork.
 7. **The verdict file** — JSON, with `verdict`, `reason` and `until`. The date is required, a date
    further out than a year is capped, and a file that does not parse hides nothing: every finding is
    reported and the run says what it could not read.
-8. **Where the verdicts are read from** — the base of the pull request, by the step itself. A verdict
-   read from the pull request lets its author silence the review of their own pull request, and
-   nothing in the step can tell that apart from a legitimate verdict. A caller may say where the
-   verdicts live; it may never hand them over.
+8. **Where the verdicts are read from** — the base of the pull request, by the step itself, from a
+   fixed path. A verdict read from the pull request lets its author silence the review of their own
+   pull request, and nothing in the step can tell that apart from a legitimate verdict. The caller
+   says nothing about the verdicts at all: neither where they live nor what they are.
 9. **What the step posts** — text, not markup: the key and the reason are escaped, cut to a line, and
    carry no link, no image and no mention.
 

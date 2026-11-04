@@ -761,7 +761,7 @@ const check = (name, ok, detail = '') => {
   check('the contract says where the verdicts may be read from',
     /base/i.test(doc) && /verdict/i.test(doc), '');
   check('the contract says the caller may not hand them over',
-    /never say \*what\* they are|never hand them over/i.test(doc), '');
+    /says nothing at all about the verdicts/i.test(doc), '');
 
   // A failure message can carry a path from the diff, so it is text like any
   // other — and it is escaped by the module, in one place, so the two
