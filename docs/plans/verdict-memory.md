@@ -92,7 +92,8 @@ it.
 {
   ".github/dependabot.yml.reference": {
     "verdict": "accepted",
-    "reason": "frozen archival copy; Dependabot does not read it"
+    "reason": "frozen archival copy; Dependabot does not read it",
+    "until": "2027-01-01"
   },
   "src/api/user.ts::CWE-89": {
     "verdict": "accepted",
@@ -106,11 +107,12 @@ it.
 |---|---|
 | `verdict` | what the human decided. `accepted` by default. Recorded, not acted upon: any verdict covers the finding. |
 | `reason` | why. Shown to the reader next to the finding. |
-| `until` | a date. After it the verdict covers nothing and the finding is reported again. |
+| `until` | a date. **Required.** After it the verdict covers nothing and the finding is reported again. |
 
-An accepted risk is not a sentence for ever. The date is the way out, and a
-date nobody can read is treated as passed — a verdict that hides a finding
-forever because of a typo is the worse failure.
+An accepted risk is not a sentence for ever. A verdict with no date is not a
+decision about a finding — it is a decision never to be told about it again —
+so it does not apply, and a date further out than a year is capped to a year.
+A date nobody can read is treated as passed.
 
 **A file that does not parse hides nothing.** An unreadable verdict leaves
 every finding reported, and the run says what it could not read.
@@ -139,32 +141,64 @@ The caller reads it, because the reusable workflow cannot: it is called from
 another repository, and a checkout of the caller's repository does not work on
 a pull request from a fork.
 
-The reference consumer reads the file out of the *merge commit* of the pull
-request, so a pull request that adds a verdict has it in force at once.
+**From the base of the pull request, not from the pull request.** A verdict
+silences a finding, so a pull request that carries its own verdicts is a pull
+request that silences its own review. The verdicts of the merge commit are
+the verdicts the pull request author wrote. The reference consumer therefore
+reads the file with `git show "$BASE:<path>"` — the base commit — and a
+verdict takes effect when it is merged, which is when it was agreed to.
+
+This was not the first design. The first one read the file out of the
+checkout, which is the merge commit; the security audit of the pull request
+that implemented it said, in as many words, that a pull request author could
+add a file-wide verdict for a file they touched and silence the review of
+their own pull request. The finding was right.
+
+### What goes into the comment is text, not markup
+
+The key carries a path the model read out of the diff, and the reason is
+whatever a human wrote. What the step posts is attributed to the bot, so
+neither may change the shape of the comment: the code span may not be closed,
+and there is no link, no image, no mention and no paragraph. The paths and the
+reasons are escaped and cut to a line before they are printed.
+
+The security audit of the same pull request said this too (CWE-116), and it
+was right for the same reason: the path comes from the diff, and the diff is
+written by whoever opened the pull request.
 
 ## Verification
 
-`scripts/check-thread-sync.mjs`, thirty-eight new checks, run by the consumer
-smoke test:
+`scripts/check-thread-sync.mjs`, new checks, run by the consumer smoke test:
 
 1. a verdict file parses; a file that does not parse hides nothing and is
    reported;
 2. the class of a key is folded through the CANON map;
-3. a finding a verdict covers is not posted, and the comment that is already
+3. a verdict with no date does not apply, and a date further out than a year
+   is capped;
+4. a finding a verdict covers is not posted, and the comment that is already
    there stays;
-4. a verdict covers the finding wherever it moved to — the line is not part of
+5. a verdict covers the finding wherever it moved to — the line is not part of
    the key;
-5. a verdict on the file covers every class in it, and no other file;
-6. an expired verdict covers nothing; an unreadable date covers nothing and is
+6. a verdict on the file covers every class in it, and no other file;
+7. an expired verdict covers nothing; an unreadable date covers nothing and is
    reported;
-7. the whole step, against the stand-in for the GitHub API: a covered finding
+8. the whole step, against the stand-in for the GitHub API: a covered finding
    is not posted, the log line counts the verdicts, the summary names the
    verdict and its reason;
-8. the report gives the key to file, and the contract and both callers know
-   about the verdict layer.
+9. the report gives the key to file, and the key and the reason cannot carry
+   markup, a link, a mention or a paragraph into a comment the bot posts;
+10. the reference consumer reads the verdicts from the base of the pull
+    request and not out of the checkout — a check that fails the moment
+    somebody moves the read back into the merge commit;
+11. the contract and both callers know about the verdict layer.
 
 The end-to-end proof is a pull request on a consumer: a verdict in the file,
 a finding that would be reported, and a run that does not report it.
+
+**The dogfood review of the pull request that implemented this found two of
+its own holes** — the untrusted source of the verdicts and the unsanitised
+text — and both are fixed above. A feature that silences a review is a
+feature that has to be reviewed twice.
 
 ## What this does not do
 

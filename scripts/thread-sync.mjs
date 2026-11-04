@@ -165,6 +165,48 @@ export const classOfText = (text) => {
 export const verdictKey = (file, cls) => (cls ? `${file}::${cls}` : String(file || ''));
 
 /**
+ * The verdict a human did not write down as anything else.
+ *
+ * The value is recorded, not acted upon: any verdict covers the finding. The
+ * name is here because the value appears in the contract, in the module and
+ * in the tests, and a literal in three places is three places to drift.
+ */
+export const DEFAULT_VERDICT = 'accepted';
+
+/**
+ * How long a verdict may last.
+ *
+ * A verdict without a date is not a decision about a finding — it is a
+ * decision to never be told about it again, and it does not apply. A date
+ * further out than this is capped, for the same reason: a verdict that hides
+ * a finding for ever hides a defect that appears tomorrow too.
+ */
+export const MAX_HORIZON_DAYS = 365;
+
+/**
+ * Text inside a code span: nothing may close the span.
+ *
+ * The key carries a path the model read out of the diff, so it is data, not
+ * a name anyone chose.
+ */
+const safeCode = (value, max = 200) => String(value == null ? '' : value)
+  .replace(/\s+/g, ' ')
+  .replace(/`/g, "'")
+  .trim()
+  .slice(0, max);
+
+/**
+ * Plain text in a comment the bot posts: no markup, no mention.
+ *
+ * What the bot posts is attributed to the bot. A path from the diff and a
+ * reason from a file must not be able to put a link, an image or a ping
+ * under its name.
+ */
+const safeText = (value, max = 200) => safeCode(value, max)
+  .replace(/[<>@]/g, '')
+  .replace(/([\\*_\[\]()|])/g, '\\$1');
+
+/**
  * The key as it is written down, normalised.
  *
  * The class part is folded through the CANON map, exactly as a finding's class
@@ -222,22 +264,35 @@ export const parseVerdicts = (raw, { now = new Date() } = {}) => {
       continue;
     }
     let expired = false;
-    const until = entry.until ? String(entry.until).trim() : null;
-    if (until) {
-      const at = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(until) ? `${until}T00:00:00Z` : until);
+    let until = null;
+    const written_until = entry.until ? String(entry.until).trim() : null;
+    if (!written_until) {
+      // Every verdict expires. A verdict with no date is not a decision
+      // about this finding — it is a decision never to be told about it
+      // again — and it does not apply.
+      errors.push(`verdicts: "${written}" has no "until" date — it does not apply`);
+      expired = true;
+    } else {
+      const at = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(written_until) ? `${written_until}T00:00:00Z` : written_until);
       // An unreadable date is treated as expired: a verdict that hides a
       // finding forever because of a typo is the worse failure.
       if (Number.isNaN(at)) {
-        errors.push(`verdicts: "${written}" has an unreadable "until" — treated as expired`);
+        errors.push(`verdicts: "${written}" has an unreadable "until" — it does not apply`);
         expired = true;
       } else {
-        expired = at <= now.getTime();
+        const cap = now.getTime() + MAX_HORIZON_DAYS * 24 * 60 * 60 * 1000;
+        const effective = Math.min(at, cap);
+        until = new Date(effective).toISOString().slice(0, 10);
+        expired = effective <= now.getTime();
+        if (effective !== at) {
+          errors.push(`verdicts: "${written}" was capped to ${until} — a verdict lasts ${MAX_HORIZON_DAYS} days at most`);
+        }
       }
     }
     const key = normalizeVerdictKey(written);
     entries.set(key, {
       key,
-      verdict: entry.verdict ? String(entry.verdict) : 'accepted',
+      verdict: entry.verdict ? String(entry.verdict) : DEFAULT_VERDICT,
       reason: entry.reason ? String(entry.reason) : '',
       until,
       expired,
@@ -283,25 +338,29 @@ export const verdictSummary = (vd = {}, { path = '' } = {}) => {
   if (covered.length) {
     b += `**Not reported — a human decided about ${covered.length} finding(s):**\n\n`;
     for (const c of covered) {
-      b += `- \`${c.key}\` — ${c.verdict}${c.reason ? `: ${c.reason}` : ''}\n`;
+      b += `- \`${safeCode(c.key)}\` — ${safeText(c.verdict)}`;
+      if (c.reason) b += `: ${safeText(c.reason)}`;
+      if (c.until) b += ` (until ${safeCode(c.until)})`;
+      b += '\n';
     }
     b += '\n';
   }
   if (expired.length) {
-    b += `**Verdicts that expired** — these findings are reported again: `
-      + `${expired.map(k => `\`${k}\``).join(', ')}\n\n`;
+    b += `**Verdicts that do not apply** — these findings are reported again: `
+      + `${expired.map(k => `\`${safeCode(k)}\``).join(', ')}\n\n`;
   }
   if (hints.length) {
     b += '<details><summary>Stop a finding being reported</summary>\n\n';
     b += path
-      ? `Add the key to \`${path}\`:\n\n`
+      ? `Add the key to \`${safeCode(path)}\`:\n\n`
       : 'Add the key to the verdicts file:\n\n';
     for (const h of hints) {
       const classes = Array.isArray(h.classes) ? h.classes : [];
-      for (const c of classes) b += `- \`${verdictKey(h.file, c)}\`\n`;
-      if (!classes.length) b += `- \`${h.file}\`\n`;
+      for (const c of classes) b += `- \`${safeCode(verdictKey(h.file, c))}\`\n`;
+      if (!classes.length) b += `- \`${safeCode(h.file)}\`\n`;
     }
-    b += '\n</details>\n';
+    b += '\nEvery verdict needs a `reason` and an `until` date — one without a date does not apply.\n\n';
+    b += '</details>\n';
   }
   return b;
 };
@@ -322,7 +381,7 @@ export const verdictSummary = (vd = {}, { path = '' } = {}) => {
  */
 export const planSync = ({ threads = [], findings = [], inDiff = [], verdicts = null } = {}) => {
   const diff = inDiff instanceof Set ? inDiff : new Set(inDiff);
-  const known = verdicts instanceof Map ? verdicts : parseVerdicts(verdicts).entries;
+  const entries = verdicts instanceof Map ? verdicts : parseVerdicts(verdicts).entries;
 
   // Live threads of this pipeline, by class and file. The class is the
   // identity: the line moves, the class does not.
@@ -370,7 +429,7 @@ export const planSync = ({ threads = [], findings = [], inDiff = [], verdicts = 
     // reported again. The comment that is already there stays — it is the
     // record of the decision, and closing it would erase the reason the
     // finding is not reported.
-    const verdict = verdictFor(known, f.file, cls);
+    const verdict = verdictFor(entries, f.file, cls);
     if (verdict) {
       skipped.push({ finding: f, why: 'verdict' });
       covered.push({ finding: f, class: cls, verdict });
@@ -414,7 +473,7 @@ export const planSync = ({ threads = [], findings = [], inDiff = [], verdicts = 
   for (const f of findings) {
     if (!diff.has(f.file)) continue;
     const cls = classOfFinding(f);
-    if (verdictFor(known, f.file, cls)) continue;
+    if (verdictFor(entries, f.file, cls)) continue;
     const list = hintFiles.get(f.file) || [];
     if (cls && !list.includes(cls)) list.push(cls);
     hintFiles.set(f.file, list);
@@ -427,7 +486,7 @@ export const planSync = ({ threads = [], findings = [], inDiff = [], verdicts = 
     keep: [...kept],
     skipped,
     covered,
-    expired: [...known.values()].filter(v => v.expired).map(v => v.key),
+    expired: [...entries.values()].filter(v => v.expired).map(v => v.key),
     hints,
   };
 };
@@ -619,6 +678,7 @@ export const syncThreads = async ({ github, context, findings = [], marker, veri
       class: c.class,
       verdict: c.verdict.verdict,
       reason: c.verdict.reason,
+      until: c.verdict.until,
     })),
     expired: plan.expired,
     hints: plan.hints,

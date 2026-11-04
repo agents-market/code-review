@@ -184,7 +184,8 @@ The verdicts are a file the human writes and the repository keeps:
 {
   ".github/dependabot.yml.reference": {
     "verdict": "accepted",
-    "reason": "frozen archival copy; Dependabot does not read it"
+    "reason": "frozen archival copy; Dependabot does not read it",
+    "until": "2027-01-01"
   },
   "src/api/user.ts::CWE-89": {
     "verdict": "accepted",
@@ -202,13 +203,30 @@ available there.
 |---|---|
 | `verdict` | what the human decided. `accepted` by default. It is recorded, not acted upon: any verdict covers the finding. |
 | `reason` | why. Shown to the reader next to the finding. |
-| `until` | a date (`YYYY-MM-DD`). After it the verdict covers nothing and the finding is reported again. |
+| `until` | a date (`YYYY-MM-DD`), and it is **required**. After it the verdict covers nothing and the finding is reported again. |
 
-A key with no `::` covers the whole file. That is how a file that is inert on
-purpose — a reference copy, a generated file — is put to rest.
+**Every verdict expires.** A verdict with no date is not a decision about a
+finding — it is a decision never to be told about it again — so it does not
+apply. A date further out than a year is capped to a year, for the same
+reason: a verdict that hides a finding for ever hides a defect that appears
+tomorrow too. A date nobody can read is treated as passed.
 
 **A file that does not parse hides nothing.** An unreadable verdict leaves
 every finding reported, and the run says what it could not read.
+
+### Where the verdicts may be read from
+
+**From the base of the pull request, not from the pull request.**
+
+This is the security property of the whole layer, and it is not a detail: a
+verdict silences a finding, so a pull request that carries its own verdicts
+is a pull request that silences its own review. The verdicts of the merge
+commit are the verdicts the pull request author wrote.
+
+So the caller reads the file from the base commit, and a verdict takes effect
+when it is merged — which is when it was agreed to. A consumer that reads the
+verdicts from anywhere the pull request can write breaks this, and nothing in
+the step can tell it apart from a legitimate one.
 
 ### What a verdict does
 
@@ -228,12 +246,21 @@ in mind. That is the granularity the sync already uses — one comment per
 (file, class) — so a verdict hides no more than the comment already hid. The
 `until` date is the way out.
 
+### What goes into the comment is text, not markup
+
+The key carries a path the model read out of the diff, and the reason is
+whatever a human wrote. What the step posts is attributed to the bot, so
+neither may change the shape of the comment: no code span may be closed, no
+link, no image, no mention, and not more than a line's worth. The paths and
+the reasons are escaped before they are printed.
+
 ### Where the file lives
 
 The caller reads it and passes the content in. The reusable workflow
 (`.github/workflows/thread-sync.yml`) takes a `verdicts` input; the reference
 consumer (`.github/workflows/ai-review.yml`) reads
-`.github/ai-review-verdicts.json` out of its checkout and passes it on.
+`.github/ai-review-verdicts.json` out of the base commit of the pull request
+and passes it on.
 
 The caller reads it, because the reusable workflow cannot: it is called from
 another repository, and a checkout of the caller's repository does not work on
@@ -252,8 +279,14 @@ a pull request from a fork.
    the message. The confidence is `(conf N%)`, and the style category tag sits immediately after it.
 6. **The verdict key** — `path` for a whole file, `path::CLASS` for one class in it, with the class
    folded through `CANON`.
-7. **The verdict file** — JSON, with `verdict`, `reason` and `until`. A file that does not parse
-   hides nothing: every finding is reported and the run says what it could not read.
+7. **The verdict file** — JSON, with `verdict`, `reason` and `until`. The date is required, a date
+   further out than a year is capped, and a file that does not parse hides nothing: every finding is
+   reported and the run says what it could not read.
+8. **Where the verdicts are read from** — the base of the pull request. A verdict read from the pull
+   request lets its author silence the review of their own pull request, and nothing in the step can
+   tell that apart from a legitimate verdict.
+9. **What the step posts** — text, not markup: the key and the reason are escaped, cut to a line, and
+   carry no link, no image and no mention.
 
 ## What breaks when this changes
 

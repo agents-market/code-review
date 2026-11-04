@@ -138,24 +138,34 @@ jobs:
       # lives in the repository, so the decision survives the next push and
       # the next pull request.
       #
+      # The BASE commit, not the merge commit. A pull request author must
+      # not be able to silence the review of their own pull request, so the
+      # verdicts are read from the base — the state the maintainer agreed
+      # to. A verdict takes effect when it is merged, which is when it was
+      # agreed to.
+      #
       # The path is a convention of this file, not a rule of the contract: a
       # consumer that wants another one reads it itself and passes the
-      # content to the reusable workflow. Here it is read out of the
-      # checkout, which is the merge commit of the pull request — so a pull
-      # request that adds a verdict has it in force at once.
+      # content to the reusable workflow.
       #
       # No file, no verdicts: the step below behaves exactly as it did
       # before the verdict layer.
       - name: Read the verdicts
         id: verdicts
         continue-on-error: true
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           F=".github/ai-review-verdicts.json"
-          if [ -f "$F" ]; then
+          CONTENT=""
+          if [ -n "${BASE:-}" ]; then
+            CONTENT=$(git show "$BASE:$F" 2>/dev/null || true)
+          fi
+          if [ -n "$CONTENT" ]; then
             {
               echo 'content<<AM_VERDICTS_8f3c'
-              cat "$F"
+              printf '%s\n' "$CONTENT"
               echo AM_VERDICTS_8f3c
             } >> "$GITHUB_OUTPUT"
           fi
