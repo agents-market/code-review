@@ -48,6 +48,10 @@ import {
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const ROOT = join(HERE, '..');
 
+const MS_PER_DAY = 86400000;
+/** A date `n` days from now, as `YYYY-MM-DD`. */
+const inDays = (n) => new Date(Date.now() + n * MS_PER_DAY).toISOString().slice(0, 10);
+
 let failures = 0;
 const check = (name, ok, detail = '') => {
   if (ok) {
@@ -467,7 +471,6 @@ const check = (name, ok, detail = '') => {
 //     push. The sync knew what it had said; it did not know what a human
 //     had decided.
 {
-  const inDays = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
   const parsed = parseVerdicts(`{"src/a.ts::CWE-89": {"verdict": "accepted", "reason": "by design", "until": "${inDays(30)}"}}`);
   check('a verdict file parses', parsed.entries.size === 1, JSON.stringify([...parsed.entries.keys()]));
   check('the key is the file and the class', parsed.entries.has('src/a.ts::CWE-89'),
@@ -511,7 +514,6 @@ const check = (name, ok, detail = '') => {
 // 16. A finding a human decided about is not reported again — and the
 //     comment that is already there stays.
 {
-  const inDays = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
   const findings = [{ file: 'src/a.ts', line: 10, cwe: 'CWE-89', severity: 'high', message: 'raw SQL' }];
   const standing = [{
     id: 't1', path: 'src/a.ts', line: 10, isResolved: false, isOutdated: false,
@@ -565,7 +567,7 @@ const check = (name, ok, detail = '') => {
   const past = parseVerdicts('{"src/a.ts::CWE-89": {"until": "2020-01-01"}}');
   check('an expired verdict covers nothing', verdictFor(past.entries, 'src/a.ts', 'CWE-89') === null,
     JSON.stringify(past.entries.get('src/a.ts::CWE-89')));
-  const future = parseVerdicts(`{"src/a.ts::CWE-89": {"until": "${new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)}"}}`);
+  const future = parseVerdicts(`{"src/a.ts::CWE-89": {"until": "${inDays(30)}"}}`);
   check('a verdict that has not expired covers the finding',
     verdictFor(future.entries, 'src/a.ts', 'CWE-89') !== null, '');
   const unreadable = parseVerdicts('{"src/a.ts::CWE-89": {"until": "next tuesday"}}');
@@ -615,7 +617,7 @@ const check = (name, ok, detail = '') => {
     payload: { pull_request: { head: { sha: 'head123' }, base: { sha: 'base123' } } },
   };
   const finding = { file: 'src/a.ts', line: 10, cwe: 'CWE-89', severity: 'high', message: 'raw SQL', confidence: 0.9 };
-  const until = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+  const until = inDays(30);
   const verdicts = `{"src/a.ts::CWE-89": {"verdict": "accepted", "reason": "by design", "until": "${until}"}}`;
   const github = makeGithub([standing], verdicts);
   const r = await syncThreads({

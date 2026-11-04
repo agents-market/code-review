@@ -522,10 +522,8 @@ jobs:
                 github, context, findings,
                 marker: process.env.MARKER,
                 verified: cwe.verified || {},
-                // The verdicts are read by the module, from the base of the
-                // pull request: this file does not read them and does not
-                // pass them on. A pull request author must not be able to
-                // silence the review of their own pull request.
+                // The verdicts are read by the module — see readVerdicts.
+                // This file neither reads them nor passes them on.
                 warn: (m) => core.warning(m),
               });
               // The wording lives in the module, so this step and the
