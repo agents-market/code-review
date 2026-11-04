@@ -35,6 +35,10 @@ import {
   classOfText,
   planSync,
   buildBody,
+  parseVerdicts,
+  verdictFor,
+  verdictKey,
+  verdictSummary,
 } from './thread-sync.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -447,6 +451,192 @@ const check = (name, ok, detail = '') => {
   check('the reusable workflow takes the pipeline marker as an input', /marker:/.test(reusable), '');
   check('the reusable workflow is not two hundred lines of logic', reusable.split('\n').length < 140,
     `${reusable.split('\n').length} lines`);
+}
+
+// 15. The verdict layer: what a human decided, written down in a file the
+//     repository keeps.
+//
+//     The measurement behind it: web3eco/blockchain#83 collected 22 inline
+//     threads over 4 pushes, 14 of them on one file that is a frozen
+//     archival copy Dependabot never reads, and 8 of them got a "not
+//     fixing, by design" reply — and the finding came back on the next
+//     push. The sync knew what it had said; it did not know what a human
+//     had decided.
+{
+  const parsed = parseVerdicts('{"src/a.ts::CWE-89": {"verdict": "accepted", "reason": "by design"}}');
+  check('a verdict file parses', parsed.entries.size === 1, JSON.stringify([...parsed.entries.keys()]));
+  check('the key is the file and the class', parsed.entries.has('src/a.ts::CWE-89'),
+    JSON.stringify([...parsed.entries.keys()]));
+  check('the reason is kept', parsed.entries.get('src/a.ts::CWE-89').reason === 'by design',
+    JSON.stringify(parsed.entries.get('src/a.ts::CWE-89')));
+
+  const broken = parseVerdicts('{not json');
+  check('a file that does not parse hides nothing', broken.entries.size === 0, JSON.stringify(broken.entries.size));
+  check('a file that does not parse says so', broken.errors.length === 1, JSON.stringify(broken.errors));
+
+  const folded = parseVerdicts('{"src/a.ts::cwe-330": {}}');
+  check('the class of a key is folded through the CANON map',
+    folded.entries.has('src/a.ts::CWE-338'), JSON.stringify([...folded.entries.keys()]));
+
+  const shorthand = parseVerdicts('{"src/a.ts": "frozen copy"}');
+  check('a verdict may be a bare reason', shorthand.entries.get('src/a.ts').reason === 'frozen copy',
+    JSON.stringify(shorthand.entries.get('src/a.ts')));
+}
+
+// 16. A finding a human decided about is not reported again — and the
+//     comment that is already there stays.
+{
+  const findings = [{ file: 'src/a.ts', line: 10, cwe: 'CWE-89', severity: 'high', message: 'raw SQL' }];
+  const standing = [{
+    id: 't1', path: 'src/a.ts', line: 10, isResolved: false, isOutdated: false,
+    body: '<!-- am:p -->\n🔴 **HIGH** `CWE-89`\n<!-- am:class:CWE-89 -->\n (conf 90%): raw SQL',
+  }];
+  const verdicts = parseVerdicts('{"src/a.ts::CWE-89": {"verdict": "accepted", "reason": "by design"}}').entries;
+  const plan = planSync({ threads: standing, findings, inDiff: ['src/a.ts'], verdicts });
+  check('a finding a verdict covers is not posted', plan.post.length === 0, JSON.stringify(plan.post));
+  check('the comment that is already there stays', !plan.close.some(t => t.id === 't1'), JSON.stringify(plan.close));
+  check('the run says a verdict covered it', plan.covered.length === 1
+    && plan.skipped.some(s => s.why === 'verdict'), JSON.stringify(plan.skipped));
+
+  // The line is not part of the key: over 26 findings of
+  // code-review-security-audit 3.4.7 on three real diffs, not one repeated
+  // with the same line. A verdict keyed by a coordinate would expire every
+  // time an unrelated edit moved the code above it.
+  const moved = planSync({
+    threads: [], findings: [{ file: 'src/a.ts', line: 99, cwe: 'CWE-89', severity: 'high', message: 'raw SQL' }],
+    inDiff: ['src/a.ts'], verdicts,
+  });
+  check('a verdict covers the finding wherever it moved to', moved.post.length === 0, JSON.stringify(moved.post));
+
+  // A verdict on the file covers every class in it. That is the granularity
+  // the sync already uses — one comment per (file, class) — so a verdict
+  // hides no more than the comment already hid.
+  const fileWide = planSync({
+    threads: [],
+    findings: [
+      { file: 'src/a.ts', line: 1, cwe: 'CWE-89', severity: 'high', message: 'x' },
+      { file: 'src/a.ts', line: 2, cwe: 'CWE-798', severity: 'high', message: 'y' },
+    ],
+    inDiff: ['src/a.ts'],
+    verdicts: parseVerdicts('{"src/a.ts": {"verdict": "accepted"}}').entries,
+  });
+  check('a verdict on the file covers every class in it',
+    fileWide.post.length === 0 && fileWide.covered.length === 2, JSON.stringify(fileWide.covered));
+
+  // Another file is not covered by it.
+  const other = planSync({
+    threads: [], findings: [{ file: 'src/b.ts', line: 1, cwe: 'CWE-89', severity: 'high', message: 'x' }],
+    inDiff: ['src/b.ts'], verdicts,
+  });
+  check('a verdict covers only its own file', other.post.length === 1, JSON.stringify(other.post));
+}
+
+// 17. A verdict that expired covers nothing. An accepted risk is not a
+//     sentence for ever: the finding comes back when the date passes, and a
+//     date nobody can read is treated as passed.
+{
+  const past = parseVerdicts('{"src/a.ts::CWE-89": {"until": "2020-01-01"}}');
+  check('an expired verdict covers nothing', verdictFor(past.entries, 'src/a.ts', 'CWE-89') === null,
+    JSON.stringify(past.entries.get('src/a.ts::CWE-89')));
+  const future = parseVerdicts('{"src/a.ts::CWE-89": {"until": "2099-01-01"}}');
+  check('a verdict that has not expired covers the finding',
+    verdictFor(future.entries, 'src/a.ts', 'CWE-89') !== null, '');
+  const unreadable = parseVerdicts('{"src/a.ts::CWE-89": {"until": "next tuesday"}}');
+  check('a verdict with an unreadable date covers nothing',
+    verdictFor(unreadable.entries, 'src/a.ts', 'CWE-89') === null, '');
+  check('an unreadable date is reported', unreadable.errors.length === 1, JSON.stringify(unreadable.errors));
+}
+
+// 18. The whole step, with the verdicts: a covered finding is not posted,
+//     and the run says which verdict covered it.
+{
+  const { syncThreads } = await import('./thread-sync.mjs');
+  const mkThread = (id, path, line, body) => ({
+    id, path, line, isResolved: false, isOutdated: false,
+    comments: { totalCount: 1, nodes: [{ id: `${id}-c`, databaseId: 1, body }] },
+  });
+  const calls = { posted: [], warned: [] };
+  const standing = mkThread('t1', 'src/a.ts', 10,
+    '<!-- am:p -->\n🔴 **HIGH** `CWE-89`\n<!-- am:class:CWE-89 -->\n (conf 90%): raw SQL');
+  const makeGithub = (threads) => ({
+    graphql: async () => ({ repository: { pullRequest: { reviewThreads: { nodes: threads } } } }),
+    rest: {
+      pulls: {
+        listFiles: async () => ({ data: [{ filename: 'src/a.ts' }] }),
+        deleteReviewComment: async () => { throw new Error('should not delete'); },
+        createReviewComment: async (a) => { calls.posted.push(a); return { data: {} }; },
+      },
+    },
+  });
+  const github = makeGithub([standing]);
+  const context = {
+    repo: { owner: 'o', repo: 'r' },
+    issue: { number: 7 },
+    payload: { pull_request: { head: { sha: 'abc123' } } },
+  };
+  const finding = { file: 'src/a.ts', line: 10, cwe: 'CWE-89', severity: 'high', message: 'raw SQL', confidence: 0.9 };
+  const r = await syncThreads({
+    github, context, findings: [finding], marker: 'p',
+    verdicts: '{"src/a.ts::CWE-89": {"verdict": "accepted", "reason": "by design"}}',
+    warn: (m) => calls.warned.push(m),
+  });
+  check('a covered finding is not posted', r.posted === 0 && calls.posted.length === 0, JSON.stringify(r));
+  check('the comment that is already there is not closed either',
+    r.resolved === 0 && r.replaced === 0, JSON.stringify(r));
+  check('the log line counts the verdicts', /\b1 by verdict\b/.test(r.logLine), r.logLine);
+  check('the summary names the verdict and its reason',
+    r.summary.includes('src/a.ts::CWE-89') && r.summary.includes('by design'), r.summary);
+  check('the summary offers the key of a finding no verdict covers',
+    r.summary.includes(verdictKey('src/a.ts', 'CWE-89')), r.summary);
+
+  // A verdict file that does not parse: nothing is hidden, and the run says
+  // what it could not read. Nothing stands on the pull request here, so the
+  // finding has to be posted.
+  const broken = await syncThreads({
+    github: makeGithub([]), context, findings: [finding], marker: 'p', verdicts: '{not json',
+    warn: (m) => calls.warned.push(m),
+  });
+  check('a verdict file that does not parse hides nothing', broken.posted === 1, JSON.stringify(broken));
+  check('a verdict file that does not parse is reported', calls.warned.length > 0, JSON.stringify(calls.warned));
+}
+
+// 19. The verdict report says what the reader needs: what was not reported,
+//     and what to write down to stop the rest.
+{
+  const report = verdictSummary({
+    covered: [{ key: 'src/a.ts::CWE-89', verdict: 'accepted', reason: 'by design' }],
+    expired: ['src/b.ts::CWE-798'],
+    hints: [{ file: 'src/c.ts', classes: ['NAMING'] }],
+  }, { path: '.github/ai-review-verdicts.json' });
+  check('the report names the covered finding', report.includes('src/a.ts::CWE-89'), report);
+  check('the report says why it was not reported', report.includes('by design'), report);
+  check('the report names the expired verdict', report.includes('src/b.ts::CWE-798'), report);
+  check('the report gives the key to file', report.includes('src/c.ts::NAMING'), report);
+  check('the report names where the verdicts live',
+    report.includes('.github/ai-review-verdicts.json'), report);
+  check('an empty report says nothing', verdictSummary({}) === '', verdictSummary({}));
+}
+
+// 20. The contract and the two callers know about the verdict layer. A
+//     feature the callers do not pass is a feature that does not run.
+{
+  const doc = readFileSync(join(ROOT, 'docs', 'thread-sync-contract.md'), 'utf8');
+  const reusable = readFileSync(join(ROOT, '.github', 'workflows', 'thread-sync.yml'), 'utf8');
+  const reference = readFileSync(join(ROOT, '.github', 'workflows', 'ai-review.yml'), 'utf8');
+
+  check('the contract names the verdict layer', /verdict/i.test(doc), '');
+  check('the contract names the verdict key', doc.includes('path::CLASS'), '');
+  check('the contract says the line is not part of the key',
+    /not part of the key/i.test(doc), '');
+  check('the reusable workflow takes the verdicts as an input', /verdicts:/.test(reusable), '');
+  check('the reusable workflow passes the verdicts to the module',
+    /verdicts: process\.env\.VERDICTS/.test(reusable), '');
+  check('the reference consumer reads the verdicts file',
+    /ai-review-verdicts\.json/.test(reference), '');
+  check('the reference consumer passes the verdicts to the module',
+    /verdicts: process\.env\.VERDICTS/.test(reference), '');
+  check('the reference consumer says where the verdicts live',
+    /verdictsPath:/.test(reference), '');
 }
 
 console.log(failures ? `\n${failures} checks failed` : '\nall checks passed');

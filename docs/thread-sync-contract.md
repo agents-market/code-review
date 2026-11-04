@@ -1,6 +1,6 @@
 # The inline thread sync — contract
 
-**Contract version:** `1.0`
+**Contract version:** `1.1`
 **Implemented by:** [`scripts/thread-sync.mjs`](../scripts/thread-sync.mjs)
 **Called by:** [`workflows/thread-sync.yml`](../.github/workflows/thread-sync.yml) (reusable) and
 [`.github/workflows/ai-review.yml`](../.github/workflows/ai-review.yml) (the reference consumer, which
@@ -120,6 +120,7 @@ Concretely, for a finding of class `CWE-89` on `src/a.ts`:
 | a thread of another class on the same line | the finding is posted — another weakness does not hide this one |
 | a classless thread on the same line | the finding is not posted — it cannot be told apart from this one |
 | a `CWE-89` thread, and a **second** `CWE-89` finding on another line of the same file | the second finding gets the thread that is on its line; the thread on the other line is closed and the second finding is posted |
+| a finding a human decided about | nothing is posted — a verdict covers it, and the thread stays ([the verdict layer](#the-verdict-layer)) |
 
 The match happens **before** any thread is closed. Two weaknesses of one class in one file must not
 take each other's comments away.
@@ -134,11 +135,109 @@ answered it, resolved when it is a conversation (a thread with replies is never 
 The log line says what happened:
 
 ```
-threads(<marker>) — <posted> posted, <resolved> resolved, <replaced> replaced, <suppressed> suppressed
+threads(<marker>) — <posted> posted, <resolved> resolved, <replaced> replaced, <suppressed> suppressed, <verdict> by verdict
 ```
 
 `replaced` is the counter that says "the finding moved and the old comment was closed". Without it,
 "the finding went away" and "nobody looked" look the same.
+
+`<verdict>` counts the findings a human's verdict covered. It is a part of
+`<suppressed>`: those findings were not reported because a verdict says so,
+not because a comment of the same class was already there.
+
+## The verdict layer
+
+A thread says what the pipeline found. A **verdict** says what a human decided
+about it.
+
+The measurement behind it: `web3eco/blockchain#83` collected 22 inline
+threads over 4 pushes, 14 of them on one file that is a frozen archival copy
+Dependabot never reads, and 8 of them got a "not fixing, by design" reply —
+and the finding came back on the next push. The workflow layer could not
+help: it knew what it had already said, not what a human had already decided.
+
+So the decision is written down, and the next run reads it.
+
+### The key
+
+A verdict is filed under the same identity the sync keys a thread by:
+
+| the key | it covers |
+|---|---|
+| `path` | every finding in that file |
+| `path::CLASS` | every finding of that class in that file |
+
+`CLASS` is the class the sync uses: the CWE id of a security finding, the
+category tag of a style finding — folded through `CANON`, so a verdict filed
+under `CWE-330` covers a `CWE-338` finding, because they are one weakness.
+
+The line is not part of the key, and that is measured, not guessed: over 26
+findings of `code-review-security-audit` 3.4.7 on three real diffs, **not one
+repeated with the same line**. A verdict keyed by a coordinate would expire
+every time an unrelated edit moved the code above it.
+
+### The file
+
+The verdicts are a file the human writes and the repository keeps:
+
+```json
+{
+  ".github/dependabot.yml.reference": {
+    "verdict": "accepted",
+    "reason": "frozen archival copy; Dependabot does not read it"
+  },
+  "src/api/user.ts::CWE-89": {
+    "verdict": "accepted",
+    "reason": "the string is a column name, not a query",
+    "until": "2026-12-01"
+  }
+}
+```
+
+JSON, because the step runs on a runner with no packages: the module is
+fetched with a sparse checkout and nothing else. A YAML parser is not
+available there.
+
+| field | meaning |
+|---|---|
+| `verdict` | what the human decided. `accepted` by default. It is recorded, not acted upon: any verdict covers the finding. |
+| `reason` | why. Shown to the reader next to the finding. |
+| `until` | a date (`YYYY-MM-DD`). After it the verdict covers nothing and the finding is reported again. |
+
+A key with no `::` covers the whole file. That is how a file that is inert on
+purpose — a reference copy, a generated file — is put to rest.
+
+**A file that does not parse hides nothing.** An unreadable verdict leaves
+every finding reported, and the run says what it could not read.
+
+### What a verdict does
+
+- the finding is **not posted** — not as a comment, and not as a new thread;
+- the comment that is already there **stays** — it is the record of the
+  decision, and closing it would erase the reason the finding is not
+  reported;
+- the run says so: the log line counts the findings a verdict covered, and the
+  summary lists them with their reasons;
+- the summary also lists the key of every finding no verdict covers, so a
+  reader who does not want a finding can write its verdict down without
+  reading the contract first.
+
+A verdict covers what its key covers. A verdict on `path::CWE-89` covers every
+SQL finding in that file, including one that is not the finding the human had
+in mind. That is the granularity the sync already uses — one comment per
+(file, class) — so a verdict hides no more than the comment already hid. The
+`until` date is the way out.
+
+### Where the file lives
+
+The caller reads it and passes the content in. The reusable workflow
+(`.github/workflows/thread-sync.yml`) takes a `verdicts` input; the reference
+consumer (`.github/workflows/ai-review.yml`) reads
+`.github/ai-review-verdicts.json` out of its checkout and passes it on.
+
+The caller reads it, because the reusable workflow cannot: it is called from
+another repository, and a checkout of the caller's repository does not work on
+a pull request from a fork.
 
 ## What a consumer may rely on
 
@@ -151,6 +250,10 @@ threads(<marker>) — <posted> posted, <resolved> resolved, <replaced> replaced,
    its old thread closed and is posted afresh.
 5. **The body layout** — the pipeline marker, the severity, the class marker, then the confidence and
    the message. The confidence is `(conf N%)`, and the style category tag sits immediately after it.
+6. **The verdict key** — `path` for a whole file, `path::CLASS` for one class in it, with the class
+   folded through `CANON`.
+7. **The verdict file** — JSON, with `verdict`, `reason` and `until`. A file that does not parse
+   hides nothing: every finding is reported and the run says what it could not read.
 
 ## What breaks when this changes
 
@@ -167,6 +270,10 @@ threads(<marker>) — <posted> posted, <resolved> resolved, <replaced> replaced,
 - **The body layout changes.** The legacy fallback — the class of a thread posted before the marker
   existed — reads the CWE id from the structured place after the severity, and the category tag from
   after `(conf N%)`. Move either, and the legacy threads stop being recognised.
+- **The verdict key changes.** Same failure, same silence: the findings the human decided about come
+  back, and nothing says why. The verdict report in the summary is the only place it shows, so a
+  consumer that reads its own verdicts back has to notice it. This is a minor bump — the marker format
+  and the CANON map did not move, so a consumer that reads its own *comments* back is unaffected.
 
 ## The fallback for threads posted before the marker existed
 
@@ -195,8 +302,13 @@ drift away from the code.
     with:
       findings: ${{ steps.review.outputs.findings_json }}
       marker: code-review-security-audit
+      verdicts: ${{ steps.verdicts.outputs.content }}
     secrets: inherit
 ```
+
+`verdicts` is optional. Unset, the step behaves exactly as it did before the
+verdict layer: every finding is reported unless a comment of the same class is
+already there.
 
 Pin the full commit SHA, per `CONTRIBUTING.md` — never a tag.
 
