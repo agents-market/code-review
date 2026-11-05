@@ -121,6 +121,23 @@ def classify(findings, case):
     return found, false_positives, additional, classes
 
 
+def stage1(run, case):
+    """(нашла ли, кандидатов, из них шум) для стадии 1.
+
+    Кандидат стадии 1 — это lead, а не находка: у него нет класса, только
+    файл, строка и Severity. Поэтому совпадение с посаженной слабостью
+    проверяется по файлу: кандидат указывает на файл, в котором слабость
+    посажена. Всё, что указывает на другой файл, — шум: leads, которые
+    ревью-стадии потом отбросят.
+    """
+    expect = case.get('expect') or {}
+    want_file = expect.get('file')
+    candidates = run.get('candidates') or []
+    named = any(c.get('file') == want_file for c in candidates)
+    noise = sum(1 for c in candidates if c.get('file') != want_file)
+    return named, len(candidates), noise
+
+
 def main():
     paths = sys.argv[1:]
     if not paths:
@@ -130,12 +147,26 @@ def main():
     expected = load_expected()
     print(f'прочитано файлов: {len(arms)}')
 
-    per_case = {}
+    # Two files can carry the same label — the same spec version and the same
+    # repeat count, e.g. one file per case. The label alone would collide,
+    # and every number would be counted once per file. So an arm is
+    # identified by its position; the label only names it.
+    names = []
+    dupes = Counter(label(a) for a in arms)
+    counters = Counter()
     for arm in arms:
-        for case in arm['cases']:
-            per_case.setdefault(case['id'], {})[label(arm)] = case
+        base = label(arm)
+        if dupes[base] > 1:
+            counters[base] += 1
+            names.append(f'{base} #{counters[base]}')
+        else:
+            names.append(base)
 
-    names = [label(a) for a in arms]
+    per_case = {}
+    for name, arm in zip(names, arms):
+        for case in arm['cases']:
+            per_case.setdefault(case['id'], {})[name] = case
+
     header = f"{'кейс':22} {'найдено':9} {'ложных':8} {'прочих':8} " + ' | '.join(names)
     print('\n' + header)
     totals = {'runs': 0, 'found': 0, 'errors': 0, 'fp': 0, 'additional': 0}
@@ -175,15 +206,54 @@ def main():
             print(f"{'':22} названа классами: " + ', '.join(f'{c}×{n}' for c, n in classes.most_common()))
 
     print()
-    for arm in arms:
+    for name, arm in zip(names, arms):
         cost = sum(r.get('cost_usdc', 0) for c in arm['cases'] for r in c['runs'])
         runs_n = sum(len(c['runs']) for c in arm['cases'])
         errors = sum(1 for c in arm['cases'] for r in c['runs'] if 'error' in r)
-        print(f"{label(arm):28} прогонов {runs_n:2}  ошибок {errors}  $ {cost:.5f}")
+        print(f"{name:28} прогонов {runs_n:2}  ошибок {errors}  $ {cost:.5f}")
     print()
     print(f"найдено ожидаемое: {totals['found']}/{totals['runs']} прогонов")
     print(f"ложных срабатываний: {totals['fp']}")
     print(f"прочих находок: {totals['additional']}")
+
+    # The cheap stage: did it point at the weakness at all? Without that,
+    # "the pre-filter does not narrow" cannot be acted on — there would be
+    # nothing to narrow to.
+    named_runs = 0
+    runs = 0
+    candidates_total = 0
+    noise_total = 0
+    print()
+    print('стадия 1 (pattern_scan) — указала ли на посаженную слабость')
+    print(f"{'кейс':22} {'указала':8} {'кандидатов':11} {'из них шума':12}")
+    for cid in sorted(per_case):
+        exp = expected.get(cid, {})
+        for name in names:
+            case = per_case[cid].get(name)
+            if not case:
+                continue
+            named = 0
+            seen = 0
+            cands = 0
+            noise = 0
+            for run in case['runs']:
+                if 'error' in run:
+                    continue
+                seen += 1
+                hit, count, extra = stage1(run, exp)
+                named += 1 if hit else 0
+                cands += count
+                noise += extra
+            if seen == 0:
+                continue
+            named_runs += named
+            runs += seen
+            candidates_total += cands
+            noise_total += noise
+            print(f'{cid:22} {named:>4}/{seen:<3} {cands:>11} {noise:>12}')
+    print()
+    print(f'стадия 1 указала на слабость: {named_runs}/{runs} прогонов')
+    print(f'кандидатов всего: {candidates_total}, из них не на слабость: {noise_total}')
     return 0
 
 

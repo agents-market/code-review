@@ -65,6 +65,12 @@ python3 fixtures/security-audit/summarize.py /tmp/sa.json
 node fixtures/security-audit/check-cases.mjs
 ```
 
+`--only <case>` runs one case, which is how a case that was lost to a provider
+rate limit is re-run without spending the whole corpus again. The summarizer
+takes several files and prints them side by side; two files that carry the same
+label (the same spec version and the same repeat count) are numbered, so one
+case per file does not count every run once per file.
+
 `run-cases.mjs` executes the spec through the real runtime, so the
 measurement covers the stages, the model and the runtime — not a
 re-implementation of them. The key comes from the environment, never from
@@ -145,6 +151,15 @@ to a fixed host. Some of them are real, some are noise. The corpus counts
 them and does not rule on them: a corpus that called every one of them a
 false positive would be judging the pipeline, not measuring it.
 
+A second session of the same corpus found the weakness in **20 of 20** runs
+(21 attempts, one lost to a provider rate limit), with **one** false positive —
+the same one — and **62** other findings instead of 78. The recall and the false
+positive held; the count of the pipeline's opinions about the surrounding code
+did not, and it was never expected to: it is a sampling model. That is the
+third question the corpus asks, and the answer is "not the same every time,
+except about the weakness".
+
+
 ### The class names move
 
 The same weakness does not always get the same class. The race in
@@ -156,6 +171,71 @@ So `expected.json` lists every class that names the same weakness, and the
 answer is "found" under any of them. A verdict keyed on one class number
 would miss a finding it should have caught — the same problem the verdict
 memory solves with `CANON`, in a place where it can be counted.
+
+### Does stage 1 narrow stage 2?
+
+Issue [#6](https://github.com/agents-market/github-workflows/issues/6) asks whether the
+cheap first stage narrows what the review stages read. The corpus can answer it, so
+it does.
+
+A second session recorded what the scanner said, not only what the review stages
+found: **seven cases, three runs each — 21 attempts, 20 completed (one lost to a
+provider rate limit), $0.76.**
+
+| case | stage 1 pointed at the weakness | candidates | of which elsewhere |
+|---|---|---|---|
+| `missing-authorization` | 3/3 | 5 | 0 |
+| `oauth-state` | 3/3 | 12 | 3 |
+| `path-traversal` | 2/2 | 9 | 3 |
+| `race-ownership` | **1/3** | 3 | 0 |
+| `sql-concat` | 3/3 | 8 | 0 |
+| `token-log` | 3/3 | 5 | 0 |
+| `workflow-shell` | 3/3 | 8 | 0 |
+
+**Stage 1 pointed at the weakness in 18 of 20 runs.** The two it missed are the
+same case, and the reason is not a near miss: in those runs the scanner returned
+`{"candidates": []}` — nothing at all. That is checked, not assumed: the raw
+output was captured, and an empty list is a valid answer to the stage's schema,
+not a failure to parse it. A separate five-run batch of the same case produced
+one more empty list, so **three of eight runs** of the race case got nothing from
+the scanner.
+
+The review stages found the weakness in **20 of 20** runs — including the two
+where the scanner said nothing, because they read the diff themselves.
+
+**So stage 1 does not narrow stage 2, and it cannot be made to.** Two reasons,
+one measured and one structural:
+
+- **Measured.** Narrowing stage 2 to the scanner's candidates would have lost the
+  weakness in every run where the scanner returned nothing: 2 of 20 on this
+  corpus, 3 of 8 on the race case.
+- **Structural.** `deep_review`'s prompt carries the whole diff and tells the
+  model to "re-read the diff yourself to catch business-logic flaws" and to report
+  "each NEW finding the scanner missed". The scanner's output is a lead list, not
+  a filter; stage 2 exists to find what stage 1 did not.
+
+### What the money is
+
+Per stage, over the 20 completed runs ($0.76 in total):
+
+| stage | cost | share | per run |
+|---|---|---|---|
+| `pattern_scan` | $0.0628 | 8.2% | $0.0031 |
+| `deep_review` | $0.2789 | 36.6% | $0.0139 |
+| `gap_review` | $0.2588 | 34.0% | $0.0129 |
+| `aggregate` | $0.1615 | **21.2%** | $0.0081 |
+
+The aggregate stage reads no pipeline input of its own: it merges what the passes
+above found. It is a fifth of the run. Declaring `reads: []` removes its whole
+`Inputs:` block — the diff and the four small inputs beside it:
+
+- on this corpus, whose diffs run 1 100–4 200 characters: **$0.0012 per run**;
+- on the 47 608-character diff from #6: **$0.0239 per run**, against a run that
+  cost $0.1475.
+
+That is the saving that does not cost recall. The rest of the aggregate's input —
+the review stages' own output — stays: `reads:` narrows the inputs, not the
+previous stages' results.
 
 ### What a first draft of the corpus measured
 

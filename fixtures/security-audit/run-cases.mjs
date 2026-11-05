@@ -74,6 +74,18 @@ function findingsOf(text) {
   return [];
 }
 
+/** The candidates of the first stage, or [] when it said nothing. */
+function candidatesOf(text) {
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed?.candidates)) return parsed.candidates;
+  } catch {
+    return [];
+  }
+  return [];
+}
+
 for (const file of readdirSync(CASES).filter((f) => f.endsWith('.diff')).sort()) {
   const id = file.replace(/\.diff$/, '');
   if (only && id !== only) continue;
@@ -122,6 +134,12 @@ for (const file of readdirSync(CASES).filter((f) => f.endsWith('.diff')).sort())
           ...findingsOf(result.outputs?.gap_review),
         ];
 
+        // The cheap stage runs first and is supposed to hand the review
+        // stages a shortlist. What it actually hands them is recorded here:
+        // without it, "the pre-filter does not narrow" is a story, and the
+        // story may be wrong — the filter may simply find nothing.
+        const candidates = candidatesOf(result.outputs?.pattern_scan);
+
         entry.runs.push({
           n,
           attempt,
@@ -133,6 +151,16 @@ for (const file of readdirSync(CASES).filter((f) => f.endsWith('.diff')).sort())
             cost_usdc: s.costMicroUsdc / 1e6,
             model: s.model,
           })),
+          candidates: candidates.map((c) => ({
+            file: c.file ?? null,
+            line: c.line ?? null,
+            severity: c.severity ?? null,
+            description: String(c.description ?? '').slice(0, 240),
+          })),
+          // The scanner's own words. An empty candidate list and an output
+          // that could not be read look the same in `candidates`; only the
+          // raw text tells them apart.
+          pattern_scan_raw: result.outputs?.pattern_scan ?? '',
           findings: findings.map((f) => ({
             file: f.file ?? null,
             line: f.line ?? null,
