@@ -26,7 +26,7 @@ not be reported and what is expected. The pipeline never sees any of it.
 ## How it was run
 
 ```bash
-npm install --no-save --no-audit --no-fund @agentsmarket/pipeline-runtime@0.5.11
+npm install --no-save --no-audit --no-fund @agentsmarket/pipeline-runtime@0.6.0
 export MINIMAX_API_KEY=...            # the model is the spec's own default, MiniMax-M3
 
 node fixtures/style-review/run-cases.mjs --spec /path/to/style-review-3.3.6.yaml \
@@ -45,6 +45,13 @@ re-implementation of them. It passes `category_thresholds` only if the spec
 declares the input: an unknown input adds a line to the `Inputs:` block every
 stage receives, and that is a change in the prompt, so the baseline would be a
 different pipeline.
+
+**The runtime must be 0.6.0 or newer.** `reads:` is a runtime field, and a
+runtime that does not know it ignores it silently — the run then measures the
+pipeline as it was. Measured on 08.11 on this corpus: the aggregate stage cost
+$0.00514 per run without `reads:` and $0.00487 with it, the same runtime and
+the same spec otherwise. Check before you measure:
+`node -e "console.log(require('@agentsmarket/pipeline-runtime/package.json').version)"`.
 
 ## What it returns, measured 2026-11-03
 

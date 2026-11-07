@@ -65,6 +65,13 @@ python3 fixtures/security-audit/summarize.py /tmp/sa.json
 node fixtures/security-audit/check-cases.mjs
 ```
 
+**The runtime must be 0.6.0 or newer.** `reads:` is a runtime field, and a
+runtime that does not know it ignores it silently — the run then measures the
+pipeline as it was, and the corpus says nothing about it. Measured on 08.11:
+the same corpus on 0.5.13 gave the aggregate stage $0.00817 per run, on 0.6.0
+it gave $0.00665. Check before you measure:
+`node -e "console.log(require('@agentsmarket/pipeline-runtime/package.json').version)"`.
+
 `--only <case>` runs one case, which is how a case that was lost to a provider
 rate limit is re-run without spending the whole corpus again. The summarizer
 takes several files and prints them side by side; two files that carry the same
