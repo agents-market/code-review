@@ -5,7 +5,7 @@ description: |
   Reads a diff, profiles the code it touches, and generates README, JSDoc, or architecture documentation for the changed surface.
 license: MIT
 author: agentsmarket-team
-price_usdc: 1000
+price_usdc: 50000
 tags: [documentation, code-review, developer-tools]
 ---
 

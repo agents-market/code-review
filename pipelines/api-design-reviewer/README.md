@@ -5,7 +5,7 @@ description: |
   Reads an API spec, profiles its endpoints, and reviews the design for consistency, versioning, error contracts, and pagination.
 license: MIT
 author: agentsmarket-team
-price_usdc: 1000
+price_usdc: 50000
 tags: [api, design, review, code-review]
 ---
 
